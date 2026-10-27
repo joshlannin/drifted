@@ -17,8 +17,8 @@ step before you do it.
 
 **Don't assume Drifted is installed.** Most users arrive with nothing installed. Unless you can see the
 drifted tools, or the user confirms the Drifted icon is in their Mac's menu bar, installing it is the first
-step: give them the download link (<https://github.com/joshlannin/drifted/releases/latest>) and walk them
-through it before anything else.
+step: give them the download link (<https://github.com/joshlannin/drifted/releases/latest/download/Drifted.dmg>)
+and walk them through it before anything else, as in [section B](#b-guide-the-user-no-shell) step 1.
 
 | Your situation | Go to |
 |---|---|
@@ -65,8 +65,20 @@ You can't install software yourself. Walk the user through every step, starting 
 check each one worked before moving on. Drifted needs a Mac (macOS 13 or later) within Bluetooth range of the
 table.
 
-1. **Install Drifted.** Download the `.dmg` from <https://github.com/joshlannin/drifted/releases/latest>,
-   open it and drag **Drifted** to Applications. It's signed and notarized, so it opens normally.
+1. **Install Drifted.** Tell the user exactly what to expect at each point:
+   - Download: <https://github.com/joshlannin/drifted/releases/latest/download/Drifted.dmg> starts the download
+     directly. It's a file of under 1 MB called `Drifted.dmg` (or `Drifted-<version>.dmg` from the release
+     page), and it takes a second or two.
+   - Where it goes: the **Downloads** folder (in Finder, or the downloads arrow in the browser's toolbar).
+     If the user can see `Drifted.dmg` there, it has finished downloading.
+   - Install: double-click `Drifted.dmg`. A window opens showing **Drifted** and an **Applications** folder;
+     drag Drifted onto Applications. Then eject the "Drifted" disk in Finder's sidebar, and the `.dmg` can be
+     deleted.
+   - It's signed and notarized, so it opens normally. If macOS asks "Are you sure you want to open it?",
+     click **Open**.
+
+   If you're operating the user's screen yourself, say what you're doing at each of these steps, and check
+   the result (the file in Downloads, Drifted in Applications) instead of asking the user whether it worked.
 2. Open it and click **Allow** on the Bluetooth prompt. A Drifted icon appears in the menu bar and shows
    "Connected" once it finds the table. Close the HoMedics phone app first if it doesn't.
 3. Ask them to choose **Drifted → Connect your AI…** in the menu bar, copy the prompt and paste it here. Then walk

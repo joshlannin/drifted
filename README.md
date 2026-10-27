@@ -19,7 +19,7 @@ Please look at what it does, then walk me through using it, asking me what I'd l
 
 It will check your table is supported, install what's needed and help you draw your first pattern. In the
 Claude desktop app or a browser chat, paste the same prompt: it walks you through installing Drifted
-([download](https://github.com/joshlannin/drifted/releases/latest)) and connecting it, step by step.
+([download](https://github.com/joshlannin/drifted/releases/latest/download/Drifted.dmg)) and connecting it, step by step.
 
 > **AI assistants:** start with [AGENTS.md](AGENTS.md). It tells you how to install this for your user, or
 > how to build their own client or app.
@@ -72,7 +72,8 @@ using Drifted.
 
 ## Quick start (Mac)
 
-**Easiest:** download **Drifted** from [Releases](../../releases), drag it to Applications and open it.
+**Easiest:** [download Drifted.dmg](https://github.com/joshlannin/drifted/releases/latest/download/Drifted.dmg)
+(under 1 MB; it lands in your Downloads folder). Double-click it, drag Drifted to Applications and open it.
 Allow Bluetooth when asked. It sits in the menu bar, finds your table and keeps the connection. Then choose
 **Connect your AI…**: it shows a short prompt with the MCP details to paste into Claude, Codex or any other AI
 tool, on this Mac or on another computer on your network. Drifted doesn't change other apps' settings itself.
