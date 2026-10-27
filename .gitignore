@@ -1,0 +1,15 @@
+.build/
+build/
+.swiftpm/
+.DS_Store
+*.xcodeproj/xcuserdata/
+# Never commit HoMedics material or anything binary (scripts/check-publishable.sh enforces this too)
+*.apk
+*.xapk
+*.bin
+*.elf
+*.asm
+reference/
+private/
+# drifted-host state (token, slots)
+drifted-host-state/

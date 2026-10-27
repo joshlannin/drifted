@@ -1,0 +1,5 @@
+{
+  "mcpServers": {
+    "drifted": { "command": "/Applications/Drifted.app/Contents/MacOS/drifted-mcp" }
+  }
+}

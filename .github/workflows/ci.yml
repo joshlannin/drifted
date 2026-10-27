@@ -1,0 +1,13 @@
+name: ci
+on: [push, pull_request]
+jobs:
+  build:
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+      - name: Publish guard (no HoMedics material, no methodology)
+        run: scripts/check-publishable.sh
+      - name: Build
+        run: swift build
+      - name: Protocol checks (incl. spec/vectors)
+        run: swift run DriftedKitChecks

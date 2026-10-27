@@ -1,0 +1,428 @@
+{
+  "tools": [
+    {
+      "description": "Connection, what the table is drawing, progress (0-1), light and mode settings, and any latched table alarms (fatal alarms stay listed until the table reboots).",
+      "inputSchema": {
+        "properties": {},
+        "required": [],
+        "type": "object"
+      },
+      "name": "get_status"
+    },
+    {
+      "description": "Pattern ids stored on the table, with names for ones drifted-host manages.",
+      "inputSchema": {
+        "properties": {},
+        "required": [],
+        "type": "object"
+      },
+      "name": "list_patterns"
+    },
+    {
+      "description": "Digital twin, no table needed: check a drawing without sending it. Returns issues (errors block sending; 'fixed' were repaired) and stats (points, length, estimated seconds to draw).",
+      "inputSchema": {
+        "properties": {
+          "clear": {
+            "enum": [
+              "none",
+              "area",
+              "full"
+            ],
+            "type": "string"
+          },
+          "name": {
+            "description": "Short name for the drawing",
+            "type": "string"
+          },
+          "points": {
+            "description": "Alternative to xy: [theta, rho] polar points, theta in radians, rho 0 (centre) to 1 (rim).",
+            "items": {
+              "items": {
+                "type": "number"
+              },
+              "maxItems": 2,
+              "minItems": 2,
+              "type": "array"
+            },
+            "type": "array"
+          },
+          "thr": {
+            "description": "Alternative: Sisyphus .thr text (\"theta rho\" per line).",
+            "type": "string"
+          },
+          "xy": {
+            "description": "The path as [x, y] points in table radii: the table is the unit disc, centre (0,0), +x right, +y up. The ball never lifts, so the whole path is drawn, including moves between shapes.",
+            "items": {
+              "items": {
+                "type": "number"
+              },
+              "maxItems": 2,
+              "minItems": 2,
+              "type": "array"
+            },
+            "type": "array"
+          }
+        },
+        "required": [],
+        "type": "object"
+      },
+      "name": "validate_pattern"
+    },
+    {
+      "description": "Digital twin, no table needed: shows the drawing before anything moves. Returns two images: the sand as it should look afterwards (grooves as wide as the ball, so lines closer than about 0.07 merge, as on the table) and a route diagram (green start, red end; every connecting move is drawn too). Always look at both before show_pattern, and iterate until it reads well.",
+      "inputSchema": {
+        "properties": {
+          "clear": {
+            "enum": [
+              "none",
+              "area",
+              "full"
+            ],
+            "type": "string"
+          },
+          "name": {
+            "description": "Short name for the drawing",
+            "type": "string"
+          },
+          "points": {
+            "description": "Alternative to xy: [theta, rho] polar points, theta in radians, rho 0 (centre) to 1 (rim).",
+            "items": {
+              "items": {
+                "type": "number"
+              },
+              "maxItems": 2,
+              "minItems": 2,
+              "type": "array"
+            },
+            "type": "array"
+          },
+          "thr": {
+            "description": "Alternative: Sisyphus .thr text (\"theta rho\" per line).",
+            "type": "string"
+          },
+          "xy": {
+            "description": "The path as [x, y] points in table radii: the table is the unit disc, centre (0,0), +x right, +y up. The ball never lifts, so the whole path is drawn, including moves between shapes.",
+            "items": {
+              "items": {
+                "type": "number"
+              },
+              "maxItems": 2,
+              "minItems": 2,
+              "type": "array"
+            },
+            "type": "array"
+          }
+        },
+        "required": [],
+        "type": "object"
+      },
+      "name": "preview_pattern"
+    },
+    {
+      "description": "Digital twin, no table needed: saves an animated GIF of the ball drawing it (a few seconds long), for showing the user before committing minutes of drawing time. Returns the file path and the real drawing time.",
+      "inputSchema": {
+        "properties": {
+          "clear": {
+            "enum": [
+              "none",
+              "area",
+              "full"
+            ],
+            "type": "string"
+          },
+          "name": {
+            "description": "Short name for the drawing",
+            "type": "string"
+          },
+          "points": {
+            "description": "Alternative to xy: [theta, rho] polar points, theta in radians, rho 0 (centre) to 1 (rim).",
+            "items": {
+              "items": {
+                "type": "number"
+              },
+              "maxItems": 2,
+              "minItems": 2,
+              "type": "array"
+            },
+            "type": "array"
+          },
+          "save_to": {
+            "description": "File path for the .gif (default: ~/Downloads/<name>.gif)",
+            "type": "string"
+          },
+          "seconds": {
+            "description": "Animation length, default 6",
+            "type": "number"
+          },
+          "thr": {
+            "description": "Alternative: Sisyphus .thr text (\"theta rho\" per line).",
+            "type": "string"
+          },
+          "xy": {
+            "description": "The path as [x, y] points in table radii: the table is the unit disc, centre (0,0), +x right, +y up. The ball never lifts, so the whole path is drawn, including moves between shapes.",
+            "items": {
+              "items": {
+                "type": "number"
+              },
+              "maxItems": 2,
+              "minItems": 2,
+              "type": "array"
+            },
+            "type": "array"
+          }
+        },
+        "required": [],
+        "type": "object"
+      },
+      "name": "animate_pattern"
+    },
+    {
+      "description": "Draw something now. drifted-host validates, stores it in a managed slot (reusing one if it already holds the drawing) and starts it. clear='area' sweeps the sand under the drawing first so it reads cleanly (a few minutes); 'full' sweeps the whole table (~10 min).",
+      "inputSchema": {
+        "properties": {
+          "clear": {
+            "default": "none",
+            "enum": [
+              "none",
+              "area",
+              "full"
+            ],
+            "type": "string"
+          },
+          "name": {
+            "description": "Short name for the drawing",
+            "type": "string"
+          },
+          "points": {
+            "description": "Alternative to xy: [theta, rho] polar points, theta in radians, rho 0 (centre) to 1 (rim).",
+            "items": {
+              "items": {
+                "type": "number"
+              },
+              "maxItems": 2,
+              "minItems": 2,
+              "type": "array"
+            },
+            "type": "array"
+          },
+          "thr": {
+            "description": "Alternative: Sisyphus .thr text (\"theta rho\" per line).",
+            "type": "string"
+          },
+          "xy": {
+            "description": "The path as [x, y] points in table radii: the table is the unit disc, centre (0,0), +x right, +y up. The ball never lifts, so the whole path is drawn, including moves between shapes.",
+            "items": {
+              "items": {
+                "type": "number"
+              },
+              "maxItems": 2,
+              "minItems": 2,
+              "type": "array"
+            },
+            "type": "array"
+          }
+        },
+        "required": [],
+        "type": "object"
+      },
+      "name": "show_pattern"
+    },
+    {
+      "description": "Store a drawing permanently under a name (for playlists). Most callers want show_pattern instead.",
+      "inputSchema": {
+        "properties": {
+          "name": {
+            "description": "Short name for the drawing",
+            "type": "string"
+          },
+          "points": {
+            "description": "Alternative to xy: [theta, rho] polar points, theta in radians, rho 0 (centre) to 1 (rim).",
+            "items": {
+              "items": {
+                "type": "number"
+              },
+              "maxItems": 2,
+              "minItems": 2,
+              "type": "array"
+            },
+            "type": "array"
+          },
+          "thr": {
+            "description": "Alternative: Sisyphus .thr text (\"theta rho\" per line).",
+            "type": "string"
+          },
+          "xy": {
+            "description": "The path as [x, y] points in table radii: the table is the unit disc, centre (0,0), +x right, +y up. The ball never lifts, so the whole path is drawn, including moves between shapes.",
+            "items": {
+              "items": {
+                "type": "number"
+              },
+              "maxItems": 2,
+              "minItems": 2,
+              "type": "array"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "type": "object"
+      },
+      "name": "save_pattern"
+    },
+    {
+      "description": "Delete a saved pattern by id.",
+      "inputSchema": {
+        "properties": {
+          "id": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "id"
+        ],
+        "type": "object"
+      },
+      "name": "delete_pattern"
+    },
+    {
+      "description": "Play a stored pattern id, or pause/next/previous.",
+      "inputSchema": {
+        "properties": {
+          "action": {
+            "enum": [
+              "play",
+              "pause",
+              "next",
+              "previous"
+            ],
+            "type": "string"
+          },
+          "id": {
+            "description": "Pattern id (play only)",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "action"
+        ],
+        "type": "object"
+      },
+      "name": "playback"
+    },
+    {
+      "description": "Lights and modes. color '#rrggbb' sets a fixed colour; brightness and speed are 0-1; shifting cycles the palette; random plays random stored patterns when idle.",
+      "inputSchema": {
+        "properties": {
+          "breathing": {
+            "type": "boolean"
+          },
+          "brightness": {
+            "type": "number"
+          },
+          "color": {
+            "type": "string"
+          },
+          "loop": {
+            "type": "boolean"
+          },
+          "random": {
+            "type": "boolean"
+          },
+          "shifting": {
+            "type": "boolean"
+          },
+          "speed": {
+            "type": "number"
+          }
+        },
+        "required": [],
+        "type": "object"
+      },
+      "name": "settings"
+    },
+    {
+      "description": "Start a live session: you then push short segments (each ideally 10-30 s of drawing) and the table draws them back to back. Exclusive until live_stop.",
+      "inputSchema": {
+        "properties": {},
+        "required": [],
+        "type": "object"
+      },
+      "name": "live_start"
+    },
+    {
+      "description": "Queue a live segment. interrupt=true cuts in as soon as it's uploaded (about 1-2 s). Keep about two segments queued.",
+      "inputSchema": {
+        "properties": {
+          "interrupt": {
+            "type": "boolean"
+          },
+          "name": {
+            "description": "Short name for the drawing",
+            "type": "string"
+          },
+          "points": {
+            "description": "Alternative to xy: [theta, rho] polar points, theta in radians, rho 0 (centre) to 1 (rim).",
+            "items": {
+              "items": {
+                "type": "number"
+              },
+              "maxItems": 2,
+              "minItems": 2,
+              "type": "array"
+            },
+            "type": "array"
+          },
+          "thr": {
+            "description": "Alternative: Sisyphus .thr text (\"theta rho\" per line).",
+            "type": "string"
+          },
+          "xy": {
+            "description": "The path as [x, y] points in table radii: the table is the unit disc, centre (0,0), +x right, +y up. The ball never lifts, so the whole path is drawn, including moves between shapes.",
+            "items": {
+              "items": {
+                "type": "number"
+              },
+              "maxItems": 2,
+              "minItems": 2,
+              "type": "array"
+            },
+            "type": "array"
+          }
+        },
+        "required": [],
+        "type": "object"
+      },
+      "name": "live_push"
+    },
+    {
+      "description": "End the live session and restore random/loop settings.",
+      "inputSchema": {
+        "properties": {},
+        "required": [],
+        "type": "object"
+      },
+      "name": "live_stop"
+    },
+    {
+      "description": "connect or disconnect drifted-host from the table (disconnect lets the official app connect).",
+      "inputSchema": {
+        "properties": {
+          "action": {
+            "enum": [
+              "connect",
+              "disconnect"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "action"
+        ],
+        "type": "object"
+      },
+      "name": "connection"
+    }
+  ]
+}

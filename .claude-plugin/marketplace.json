@@ -1,0 +1,11 @@
+{
+  "name": "drifted",
+  "owner": { "name": "Josh Lannin" },
+  "plugins": [
+    {
+      "name": "drifted",
+      "source": "./integrations/claude-code",
+      "description": "Unofficial. Draw on a HoMedics Drift sand table (Bluetooth 16\"/21\" models) from Claude Code."
+    }
+  ]
+}

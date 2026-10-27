@@ -1,0 +1,47 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>CFBundleIdentifier</key>
+    <string>net.altimix.drifted.studio</string>
+    <key>CFBundleName</key>
+    <string>Drifted Studio</string>
+    <key>CFBundleDisplayName</key>
+    <string>Drifted Studio</string>
+    <key>CFBundleExecutable</key>
+    <string>DriftedStudio</string>
+    <key>CFBundlePackageType</key>
+    <string>APPL</string>
+    <key>CFBundleShortVersionString</key>
+    <string>0.1</string>
+    <key>CFBundleVersion</key>
+    <string>1</string>
+    <key>LSMinimumSystemVersion</key>
+    <string>13.0</string>
+    <key>NSHighResolutionCapable</key>
+    <true/>
+    <key>CFBundleDocumentTypes</key>
+    <array>
+        <dict>
+            <key>CFBundleTypeName</key>
+            <string>Sand pattern</string>
+            <key>CFBundleTypeRole</key>
+            <string>Viewer</string>
+            <key>LSHandlerRank</key>
+            <string>Alternate</string>
+            <key>CFBundleTypeExtensions</key>
+            <array>
+                <string>txt</string>
+                <string>thr</string>
+            </array>
+            <key>LSItemContentTypes</key>
+            <array>
+                <string>public.plain-text</string>
+                <string>public.data</string>
+            </array>
+        </dict>
+    </array>
+    <key>NSBluetoothAlwaysUsageDescription</key>
+    <string>Drifted connects to your HoMedics Drift sand table over Bluetooth to send patterns.</string>
+</dict>
+</plist>

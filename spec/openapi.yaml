@@ -1,0 +1,138 @@
+openapi: 3.1.0
+info:
+  title: drifted-host
+  version: 0.1.0
+  description: |
+    Local HTTP API of the Drifted host (Drifted.app or drifted-host). One process holds the table's Bluetooth
+    connection; clients use this API. Auth: `Authorization: Bearer <token>`, token in
+    `~/Library/Application Support/Drifted/token`. Drawings: `xy` [[x, y]…] in table radii (unit disc,
+    +x right, +y up), or `points` [[theta, rho]…], or `thr` text.
+servers: [{ url: "http://localhost:8765" }]
+security: [{ bearer: [] }]
+components:
+  securitySchemes:
+    bearer: { type: http, scheme: bearer }
+  schemas:
+    Drawing:
+      type: object
+      properties:
+        name: { type: string }
+        xy: { type: array, items: { type: array, items: { type: number }, minItems: 2, maxItems: 2 } }
+        points: { type: array, items: { type: array, items: { type: number }, minItems: 2, maxItems: 2 } }
+        thr: { type: string }
+        clear: { type: string, enum: [none, area, full], description: "show/validate/preview: sweep the sand first" }
+    Job:
+      type: object
+      properties:
+        id: { type: integer }
+        kind: { type: string }
+        state: { type: string, enum: [queued, running, done, failed] }
+        progress: { type: number }
+        error: { type: string }
+        result: { type: object, additionalProperties: { type: string } }
+    Error:
+      type: object
+      properties: { error: { type: string } }
+paths:
+  /status:
+    get:
+      summary: Connection, current drawing and progress, settings, latched alarms
+      responses: { "200": { description: Status } }
+  /events:
+    get:
+      summary: Server-Sent Events (status, connection, state, job, alarm, live)
+      responses: { "200": { description: "text/event-stream" } }
+  /connect:
+    post: { summary: Reconnect to the table, responses: { "200": { description: OK } } }
+  /disconnect:
+    post: { summary: Release the table (e.g. so the HoMedics app can connect), responses: { "200": { description: OK } } }
+  /show:
+    post:
+      summary: Draw now, via managed slots (validated; reuses a slot that already holds the drawing)
+      parameters: [{ name: wait, in: query, schema: { type: boolean }, description: "wait for the upload to finish" }]
+      requestBody: { content: { application/json: { schema: { $ref: "#/components/schemas/Drawing" } } } }
+      responses:
+        "200": { description: Finished job, content: { application/json: { schema: { $ref: "#/components/schemas/Job" } } } }
+        "202": { description: Queued job, content: { application/json: { schema: { $ref: "#/components/schemas/Job" } } } }
+        "400": { description: Invalid drawing, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+        "409": { description: A live session is running }
+  /patterns:
+    get: { summary: Stored pattern ids (names for drifted-host-managed ones), responses: { "200": { description: List } } }
+    post:
+      summary: Save a drawing permanently under a name
+      requestBody: { content: { application/json: { schema: { $ref: "#/components/schemas/Drawing" } } } }
+      responses: { "202": { description: Queued job } }
+  /patterns/{id}:
+    delete:
+      summary: Delete a saved pattern (force=true for others)
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: integer } }
+        - { name: force, in: query, schema: { type: boolean } }
+      responses: { "202": { description: Queued job }, "404": { description: Not on the table }, "409": { description: Not saved, or drawing } }
+  /patterns/validate:
+    post:
+      summary: Check a drawing; returns issues (error/fixed/warning) and stats (points, length, estimatedSeconds)
+      requestBody: { content: { application/json: { schema: { $ref: "#/components/schemas/Drawing" } } } }
+      responses: { "200": { description: Report } }
+  /patterns/preview:
+    post:
+      summary: Digital-twin preview of a drawing, before anything moves
+      description: >
+        Simulates the table: the moves between points, drawing speed and a groove as wide as the ball
+        (docs/digital-twin.md). style=sand shows how the sand should look afterwards (close lines merge, as on the
+        table); style=path is a thin route diagram (green start, red end). format=gif returns an animation of the
+        ball drawing it. Use POST /patterns/validate for timing and issues.
+      parameters:
+        - { name: size, in: query, schema: { type: integer, default: 512 }, description: "pixels (GIF max 768)" }
+        - { name: style, in: query, schema: { type: string, enum: [path, sand], default: path } }
+        - { name: format, in: query, schema: { type: string, enum: [png, gif], default: png } }
+        - { name: frames, in: query, schema: { type: integer, default: 60, maximum: 300 }, description: "gif only" }
+        - { name: seconds, in: query, schema: { type: number, default: 6 }, description: "gif only: playback length before a 2 s hold" }
+      requestBody: { content: { application/json: { schema: { $ref: "#/components/schemas/Drawing" } } } }
+      responses: { "200": { description: PNG or GIF, content: { image/png: {}, image/gif: {} } } }
+  /play:
+    post:
+      summary: Play a stored pattern
+      requestBody: { content: { application/json: { schema: { type: object, properties: { id: { type: integer } }, required: [id] } } } }
+      responses: { "200": { description: Job } }
+  /pause: { post: { summary: Toggle play/pause, responses: { "200": { description: Job } } } }
+  /next: { post: { summary: Next pattern, responses: { "200": { description: Job } } } }
+  /previous: { post: { summary: Previous pattern, responses: { "200": { description: Job } } } }
+  /settings:
+    put:
+      summary: Lights and modes
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                color: { type: string, description: "#rrggbb, fixed colour" }
+                brightness: { type: number, minimum: 0, maximum: 1 }
+                speed: { type: number, minimum: 0, maximum: 1 }
+                shifting: { type: boolean }
+                shiftSeconds: { type: integer }
+                breathing: { type: boolean }
+                random: { type: boolean }
+                loop: { type: boolean }
+                power: { type: boolean }
+      responses: { "200": { description: Job } }
+  /jobs/{id}:
+    get:
+      parameters: [{ name: id, in: path, required: true, schema: { type: integer } }]
+      responses: { "200": { description: Job } }
+  /live/start:
+    post: { summary: Start a live session (exclusive; random and loop turned off), responses: { "200": { description: OK } } }
+  /live/segments:
+    post:
+      summary: Queue a segment (10–30 s of drawing); interrupt=true cuts in at once
+      requestBody:
+        content:
+          application/json:
+            schema:
+              allOf:
+                - { $ref: "#/components/schemas/Drawing" }
+                - { type: object, properties: { interrupt: { type: boolean } } }
+      responses: { "202": { description: "{segment, depth}" } }
+  /live/stop:
+    post: { summary: End the live session and restore settings, responses: { "200": { description: OK } } }

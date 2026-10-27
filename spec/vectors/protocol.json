@@ -1,0 +1,319 @@
+{
+  "about": "Byte-exact Drift protocol examples. Packet = 7B len ackCmd data checksum (docs/protocol.md). Hex is space-separated.",
+  "host_to_table": [
+    {
+      "name": "confirm_data",
+      "note": "Generic acknowledgement (cmd 0x50 with the ack bit, no data)",
+      "hex": "7b 04 d0 4f"
+    },
+    {
+      "name": "confirm_connection",
+      "note": "Reply to 0x50/1",
+      "hex": "7b 06 50 02 01 d4"
+    },
+    {
+      "name": "current_time",
+      "note": "Sunday 2026-10-25 13:45:30: yy=26, month=9 (0-based), day=25, weekday=7",
+      "hex": "7b 0c 12 02 1a 09 19 0d 2d 1e 07 36"
+    },
+    {
+      "name": "draw_pattern_50000",
+      "note": "0x14/1 id",
+      "hex": "7b 07 14 01 50 c3 aa"
+    },
+    {
+      "name": "play_pause",
+      "note": "0x14/3",
+      "hex": "7b 05 14 03 97"
+    },
+    {
+      "name": "speed_max",
+      "note": "0x14/6 raw 75",
+      "hex": "7b 06 14 06 4b e6"
+    },
+    {
+      "name": "brightness_100",
+      "note": "0x14/7",
+      "hex": "7b 06 14 07 64 00"
+    },
+    {
+      "name": "random_off",
+      "note": "0x14/10 false",
+      "hex": "7b 06 14 0a 00 9f"
+    },
+    {
+      "name": "color_white_store_temp",
+      "note": "0x14/15 enable, r, g, b",
+      "hex": "7b 09 14 0f 01 ff ff ff a5"
+    },
+    {
+      "name": "select_color_temp",
+      "note": "0x14/13 \"Temp\"",
+      "hex": "7b 0a 14 0d 54 65 6d 70 00 3c"
+    },
+    {
+      "name": "light_fixed_full",
+      "note": "0x11/4 shifting off, shiftTime 0, breathing off, brightness 100",
+      "hex": "7b 0a 11 04 00 00 00 00 64 fe"
+    },
+    {
+      "name": "start_upload_50000_2_pages",
+      "note": "0x13/1 id, pageCount",
+      "hex": "7b 0b 13 01 50 c3 02 00 00 00 af"
+    },
+    {
+      "name": "page_1",
+      "note": "0x53/1 count 40, index 1, 40 \u00d7 (t, r): circle at rho 0.5",
+      "hex": "7b a8 53 01 28 01 00 00 00 a8 61 dc 05 a8 61 b8 0b a8 61 94 11 a8 61 70 17 a8 61 4c 1d a8 61 28 23 a8 61 04 29 a8 61 e0 2e a8 61 bc 34 a8 61 98 3a a8 61 74 40 a8 61 50 46 a8 61 2c 4c a8 61 08 52 a8 61 e4 57 a8 61 c0 5d a8 61 9c 63 a8 61 78 69 a8 61 54 6f a8 61 30 75 a8 61 0c 7b a8 61 e8 80 a8 61 c4 86 a8 61 a0 8c a8 61 7c 92 a8 61 58 98 a8 61 34 9e a8 61 10 a4 a8 61 ec a9 a8 61 c8 af a8 61 a4 b5 a8 61 80 bb a8 61 5c c1 a8 61 38 c7 a8 61 14 cd a8 61 f0 d2 a8 61 cc d8 a8 61 a8 de a8 61 84 e4 a8 61 1f"
+    },
+    {
+      "name": "page_2",
+      "note": "0x53/1 count 1, index 2 (the last page may be short)",
+      "hex": "7b 0c 53 01 01 02 00 00 00 a8 61 e7"
+    },
+    {
+      "name": "end_upload_50000_2_pages",
+      "note": "0x13/2 id, pageCount",
+      "hex": "7b 0b 13 02 50 c3 02 00 00 00 b0"
+    },
+    {
+      "name": "delete_50000",
+      "note": "0x13/3 u16 array",
+      "hex": "7b 08 13 03 01 50 c3 ad"
+    }
+  ],
+  "table_to_host": [
+    {
+      "name": "waiting_for_confirm",
+      "note": "0x50/1: reply confirm_connection",
+      "hex": "7b 05 50 01 d1"
+    },
+    {
+      "name": "asks_for_time",
+      "note": "0x32/2: reply current_time",
+      "hex": "7b 05 32 02 b4"
+    },
+    {
+      "name": "ack_of_time",
+      "note": "ack bit set: the table acknowledging our time. Reply confirm_data, not the time.",
+      "hex": "7b 05 b2 02 34"
+    },
+    {
+      "name": "init_complete",
+      "note": "0x4F/1: reply confirm_data; session ready",
+      "hex": "7b 05 4f 01 d0"
+    },
+    {
+      "name": "running_state",
+      "note": "0x35/1 (synthetic values)",
+      "hex": "7b 3a 35 01 64 54 65 6d 70 00 ff ff ff 4b 00 50 c3 c4 09 01 00 00 01 00 00 00 00 41 5f 31 31 5f 56 30 2e 37 2e 31 32 00 00 00 42 5f 31 31 5f 56 30 2e 33 2e 33 00 00 00 01 97",
+      "decoded": {
+        "brightness": 100,
+        "colorName": "Temp",
+        "patternId": 50000,
+        "progress": 0.25,
+        "status": 1,
+        "random": false,
+        "loop": false,
+        "controllerVersion": "A_11_V0.7.12",
+        "driverVersion": "B_11_V0.3.3"
+      }
+    },
+    {
+      "name": "upload_started",
+      "note": "0x34/2 with ack bit",
+      "hex": "7b 07 b4 02 50 c3 4b",
+      "decoded": {
+        "patternId": 50000
+      }
+    },
+    {
+      "name": "upload_missing_pages",
+      "note": "0x34/1 with ack bit: pages 1 and 2 missing",
+      "hex": "7b 0a b4 01 02 01 00 02 00 3f",
+      "decoded": {
+        "missing": [
+          1,
+          2
+        ]
+      }
+    },
+    {
+      "name": "upload_missing_none",
+      "note": "0x34/1, empty list: the LAST page(s) were lost. NOT success.",
+      "hex": "7b 06 b4 01 00 36",
+      "decoded": {
+        "missing": []
+      }
+    },
+    {
+      "name": "upload_stored",
+      "note": "0x34/3 with ack bit: the only success signal",
+      "hex": "7b 07 b4 03 50 c3 4c",
+      "decoded": {
+        "patternId": 50000
+      }
+    },
+    {
+      "name": "upload_failed",
+      "note": "0x34/5",
+      "hex": "7b 07 b4 05 50 c3 4e",
+      "decoded": {
+        "patternId": 50000
+      }
+    },
+    {
+      "name": "alarm_fatal_10_13",
+      "note": "0x37/1 codes [10, 13]; latched, repeats every second",
+      "hex": "7b 0a 37 01 02 0a 00 0d 00 d6",
+      "decoded": {
+        "kind": 1,
+        "codes": [
+          10,
+          13
+        ]
+      }
+    }
+  ],
+  "exchanges": [
+    {
+      "name": "handshake",
+      "steps": [
+        {
+          "from": "table",
+          "hex": "7b 05 50 01 d1"
+        },
+        {
+          "from": "host",
+          "hex": "7b 06 50 02 01 d4"
+        },
+        {
+          "from": "table",
+          "hex": "7b 3a 35 01 64 54 65 6d 70 00 ff ff ff 4b 00 50 c3 c4 09 01 00 00 01 00 00 00 00 41 5f 31 31 5f 56 30 2e 37 2e 31 32 00 00 00 42 5f 31 31 5f 56 30 2e 33 2e 33 00 00 00 01 97",
+          "note": "state dump: many messages, each answered with confirm_data"
+        },
+        {
+          "from": "host",
+          "hex": "7b 04 d0 4f"
+        },
+        {
+          "from": "table",
+          "hex": "7b 05 32 02 b4"
+        },
+        {
+          "from": "host",
+          "hex": "7b 0c 12 02 1a 09 19 0d 2d 1e 07 36"
+        },
+        {
+          "from": "table",
+          "hex": "7b 05 b2 02 34"
+        },
+        {
+          "from": "host",
+          "hex": "7b 04 d0 4f"
+        },
+        {
+          "from": "table",
+          "hex": "7b 05 4f 01 d0"
+        },
+        {
+          "from": "host",
+          "hex": "7b 04 d0 4f"
+        }
+      ]
+    },
+    {
+      "name": "upload_clean",
+      "steps": [
+        {
+          "from": "host",
+          "hex": "7b 0b 13 01 50 c3 02 00 00 00 af"
+        },
+        {
+          "from": "table",
+          "hex": "7b 07 b4 02 50 c3 4b"
+        },
+        {
+          "from": "host",
+          "hex": "7b 04 d0 4f"
+        },
+        {
+          "from": "host",
+          "hex": "7b a8 53 01 28 01 00 00 00 a8 61 dc 05 a8 61 b8 0b a8 61 94 11 a8 61 70 17 a8 61 4c 1d a8 61 28 23 a8 61 04 29 a8 61 e0 2e a8 61 bc 34 a8 61 98 3a a8 61 74 40 a8 61 50 46 a8 61 2c 4c a8 61 08 52 a8 61 e4 57 a8 61 c0 5d a8 61 9c 63 a8 61 78 69 a8 61 54 6f a8 61 30 75 a8 61 0c 7b a8 61 e8 80 a8 61 c4 86 a8 61 a0 8c a8 61 7c 92 a8 61 58 98 a8 61 34 9e a8 61 10 a4 a8 61 ec a9 a8 61 c8 af a8 61 a4 b5 a8 61 80 bb a8 61 5c c1 a8 61 38 c7 a8 61 14 cd a8 61 f0 d2 a8 61 cc d8 a8 61 a8 de a8 61 84 e4 a8 61 1f",
+          "note": "100 ms between pages"
+        },
+        {
+          "from": "host",
+          "hex": "7b 0c 53 01 01 02 00 00 00 a8 61 e7"
+        },
+        {
+          "from": "host",
+          "hex": "7b 0b 13 02 50 c3 02 00 00 00 b0"
+        },
+        {
+          "from": "table",
+          "hex": "7b 07 b4 03 50 c3 4c"
+        },
+        {
+          "from": "host",
+          "hex": "7b 04 d0 4f"
+        }
+      ]
+    },
+    {
+      "name": "upload_lost_last_page",
+      "steps": [
+        {
+          "from": "host",
+          "hex": "7b 0b 13 01 50 c3 02 00 00 00 af"
+        },
+        {
+          "from": "table",
+          "hex": "7b 07 b4 02 50 c3 4b"
+        },
+        {
+          "from": "host",
+          "hex": "7b 04 d0 4f"
+        },
+        {
+          "from": "host",
+          "hex": "7b a8 53 01 28 01 00 00 00 a8 61 dc 05 a8 61 b8 0b a8 61 94 11 a8 61 70 17 a8 61 4c 1d a8 61 28 23 a8 61 04 29 a8 61 e0 2e a8 61 bc 34 a8 61 98 3a a8 61 74 40 a8 61 50 46 a8 61 2c 4c a8 61 08 52 a8 61 e4 57 a8 61 c0 5d a8 61 9c 63 a8 61 78 69 a8 61 54 6f a8 61 30 75 a8 61 0c 7b a8 61 e8 80 a8 61 c4 86 a8 61 a0 8c a8 61 7c 92 a8 61 58 98 a8 61 34 9e a8 61 10 a4 a8 61 ec a9 a8 61 c8 af a8 61 a4 b5 a8 61 80 bb a8 61 5c c1 a8 61 38 c7 a8 61 14 cd a8 61 f0 d2 a8 61 cc d8 a8 61 a8 de a8 61 84 e4 a8 61 1f"
+        },
+        {
+          "from": "host",
+          "hex": "7b 0c 53 01 01 02 00 00 00 a8 61 e7",
+          "note": "lost in transit"
+        },
+        {
+          "from": "host",
+          "hex": "7b 0b 13 02 50 c3 02 00 00 00 b0"
+        },
+        {
+          "from": "table",
+          "hex": "7b 06 b4 01 00 36"
+        },
+        {
+          "from": "host",
+          "hex": "7b 04 d0 4f",
+          "note": "empty list = trailing pages lost: resend the tail"
+        },
+        {
+          "from": "host",
+          "hex": "7b 0c 53 01 01 02 00 00 00 a8 61 e7"
+        },
+        {
+          "from": "host",
+          "hex": "7b 0b 13 02 50 c3 02 00 00 00 b0"
+        },
+        {
+          "from": "table",
+          "hex": "7b 07 b4 03 50 c3 4c"
+        },
+        {
+          "from": "host",
+          "hex": "7b 04 d0 4f"
+        }
+      ]
+    }
+  ]
+}

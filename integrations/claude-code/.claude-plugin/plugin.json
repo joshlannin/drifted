@@ -1,0 +1,7 @@
+{
+  "name": "drifted",
+  "version": "0.1.0",
+  "description": "Unofficial. Draw on a HoMedics Drift sand table (Bluetooth 16\"/21\" models): install the Mac host, design and preview drawings, stream live segments, or build your own client.",
+  "homepage": "https://github.com/joshlannin/drifted",
+  "license": "MIT"
+}
