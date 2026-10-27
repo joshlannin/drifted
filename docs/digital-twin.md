@@ -41,6 +41,21 @@ Drawing times come from measurements on a 16" table. Across seven recorded drawi
 real table took between 0% and 25% longer than the estimate, partly because the estimate leaves out the move
 to the start. Treat the estimate as "at least this long".
 
+## High-fidelity sand model
+
+For a realistic picture of the sand, ridges, shading and all, there's a physical model of the sand in
+[tools/twin](../tools/twin/README.md). It was tuned against webcam photos of a real table until its pictures
+matched, and needs no camera to use:
+
+```sh
+python3 tools/twin/preview.py drawing.json sand.png      # or drawing.mp4 / drawing.gif for a time-lapse
+```
+
+![The sand model (top) and the real table (bottom) after three fractal drawings](media/twin-vs-table.jpg)
+
+It's slower than the built-in twin (seconds for a still, about half a minute for a time-lapse) and needs Python
+with numpy and OpenCV. Its README covers how it was built and how close it gets.
+
 ## Using it
 
 | From | Pictures | Animation | Checks and time |

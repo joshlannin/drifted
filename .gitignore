@@ -13,3 +13,5 @@ reference/
 private/
 # drifted-host state (token, slots)
 drifted-host-state/
+# Python
+__pycache__/
