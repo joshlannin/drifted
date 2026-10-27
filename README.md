@@ -17,7 +17,9 @@ https://github.com/joshlannin/drifted
 Please look at what it does, then walk me through using it, asking me what I'd like to do along the way.
 ```
 
-It will check your table is supported, install what's needed and help you draw your first pattern.
+It will check your table is supported, install what's needed and help you draw your first pattern. In the
+Claude desktop app or a browser chat, paste the same prompt: it walks you through installing Drifted
+([download](https://github.com/joshlannin/drifted/releases/latest)) and connecting it, step by step.
 
 > **AI assistants:** start with [AGENTS.md](AGENTS.md). It tells you how to install this for your user, or
 > how to build their own client or app.

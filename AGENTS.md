@@ -15,10 +15,15 @@ what Drifted does (draw on their Drift table by asking an AI assistant, or build
 table is supported, and ask what they'd like to do. Then follow the matching section below, explaining each
 step before you do it.
 
+**Don't assume Drifted is installed.** Most users arrive with nothing installed. Unless you can see the
+drifted tools, or the user confirms the Drifted icon is in their Mac's menu bar, installing it is the first
+step: give them the download link (<https://github.com/joshlannin/drifted/releases/latest>) and walk them
+through it before anything else.
+
 | Your situation | Go to |
 |---|---|
 | You can run shell commands on the user's **Mac** (Claude Code, Codex, Cursor…) and they want to draw on their table | [A. Install on a Mac](#a-install-on-a-mac) |
-| You're **Claude Desktop** or another chat app without a shell | [B. Guide the user](#b-guide-the-user-no-shell) |
+| You're **Claude Desktop**, a **web chat** (claude.ai, ChatGPT) or another app without a shell | [B. Guide the user](#b-guide-the-user-no-shell) |
 | The user is on **Windows, Linux or Android**, or wants their own client | [C. Build a client](#c-build-a-client) |
 | The user wants to **build an app** (e.g. iOS) | [D. Build an app](#d-build-an-app) |
 | The drifted tools are **already available** to you | [Drawing on the table](#drawing-on-the-table) |
@@ -56,15 +61,22 @@ the menu-bar app.
 
 ## B. Guide the user (no shell)
 
-You can't install software yourself. Walk the user through it:
+You can't install software yourself. Walk the user through every step, starting with the download, and
+check each one worked before moving on. Drifted needs a Mac (macOS 13 or later) within Bluetooth range of the
+table.
 
-1. Download **Drifted** from this repo's Releases page, open the disk image and drag it to Applications.
+1. **Install Drifted.** Download the `.dmg` from <https://github.com/joshlannin/drifted/releases/latest>,
+   open it and drag **Drifted** to Applications. It's signed and notarized, so it opens normally.
 2. Open it and click **Allow** on the Bluetooth prompt. A Drifted icon appears in the menu bar and shows
    "Connected" once it finds the table. Close the HoMedics phone app first if it doesn't.
 3. Ask them to choose **Drifted → Connect your AI…** in the menu bar, copy the prompt and paste it here. Then walk
    them through adding the server: in Claude Desktop, **Settings → Developer → Edit Config** opens
    `claude_desktop_config.json`; add the `drifted` entry under `mcpServers`, save, then quit and reopen Claude Desktop.
 4. In a new conversation the Drifted tools are available; continue at [Drawing on the table](#drawing-on-the-table).
+
+If you're a chat in a web browser (such as claude.ai), you can guide steps 1–2, but you can't reach the table
+yourself: the browser can't run local tools. For step 3, have the user install a desktop AI app that supports
+MCP (Claude Desktop is the simplest), and continue there.
 
 ## C. Build a client
 
