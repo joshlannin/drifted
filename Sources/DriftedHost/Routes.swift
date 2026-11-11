@@ -64,6 +64,8 @@ extension Daemon {
             return HTTPResponse(status: 204, body: Data())
         case ("GET", ["status"]):
             return .json(statusJSON())
+        case ("GET", ["log"]):
+            return .json(["file": logFile.path, "lines": logLines(Int(req.query["lines"] ?? "") ?? 200)])
         case ("POST", ["connect"]):
             setConnected(true); return .json(["ok": true])
         case ("POST", ["disconnect"]):

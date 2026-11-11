@@ -38,6 +38,11 @@ paths:
     get:
       summary: Connection, current drawing and progress, settings, latched alarms
       responses: { "200": { description: Status } }
+  /log:
+    get:
+      summary: Recent host log lines (also written to ~/Library/Logs/Drifted/drifted-host.log)
+      parameters: [{ name: lines, in: query, schema: { type: integer, default: 200 } }]
+      responses: { "200": { description: "{ file, lines }" } }
   /events:
     get:
       summary: Server-Sent Events (status, connection, state, job, alarm, live)

@@ -43,9 +43,44 @@ public final class Daemon {
         try FileManager.default.createDirectory(at: config.stateDir, withIntermediateDirectories: true)
         token = try Self.loadToken(config.stateDir.appendingPathComponent("token"))
         slots = SlotStore(file: config.stateDir.appendingPathComponent("slots.json"))
+        logFile = config.stateDir == Self.defaultStateDir
+            ? FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Logs/Drifted/drifted-host.log")
+            : config.stateDir.appendingPathComponent("drifted-host.log")
         table.logPackets = false
-        table.logHandler = { print("table: \($0)") }
+        table.logHandler = { [weak self] in self?.log("table: \($0)") }
     }
+
+    // MARK: Log
+
+    /// ~/Library/Logs/Drifted/drifted-host.log (or drifted-host.log in a custom --state dir).
+    let logFile: URL
+    private var recentLog: [String] = []
+    private static let logStamp: DateFormatter = {
+        let f = DateFormatter(); f.dateFormat = "yyyy-MM-dd HH:mm:ss.SSS"; return f
+    }()
+
+    /// Writes a timestamped line to stdout and the log file (kept under about 1 MB, plus one older
+    /// file), and keeps the last 500 lines for GET /log.
+    func log(_ text: String) {
+        let line = "\(Self.logStamp.string(from: Date())) \(text)"
+        print(line)
+        recentLog.append(line)
+        if recentLog.count > 500 { recentLog.removeFirst(recentLog.count - 500) }
+        let fm = FileManager.default
+        try? fm.createDirectory(at: logFile.deletingLastPathComponent(), withIntermediateDirectories: true)
+        if let size = (try? fm.attributesOfItem(atPath: logFile.path))?[.size] as? Int, size > 1_000_000 {
+            let old = logFile.deletingPathExtension().appendingPathExtension("1.log")
+            try? fm.removeItem(at: old)
+            try? fm.moveItem(at: logFile, to: old)
+        }
+        if let h = try? FileHandle(forWritingTo: logFile) {
+            h.seekToEndOfFile(); h.write(Data((line + "\n").utf8)); try? h.close()
+        } else {
+            try? Data((line + "\n").utf8).write(to: logFile)
+        }
+    }
+
+    func logLines(_ count: Int) -> [String] { Array(recentLog.suffix(max(0, count))) }
 
     // MARK: Lifecycle
 
@@ -57,7 +92,7 @@ public final class Daemon {
                                     onSSE: { [unowned self] in self.addSSE($0) }, onSSEClose: { [unowned self] in self.removeSSE($0) })
         server.start()
         self.server = server
-        print("drifted-host listening on :\(config.port); token in \(config.stateDir.path)/token")
+        log("drifted-host listening on :\(config.port); token in \(config.stateDir.path)/token; log in \(logFile.path)")
         try await start()
     }
 
@@ -96,11 +131,11 @@ public final class Daemon {
             table.stopScan()
             target = table.discovered.max(by: { $0.rssi < $1.rssi })?.id
         }
-        guard let target else { print("drifted-host: no table found; retrying"); return }
+        guard let target else { log("drifted-host: no table found; retrying"); return }
         table.connect(target)
         if await table.waitUntilReady(timeout: 30) {
             try? target.uuidString.write(to: config.stateDir.appendingPathComponent("device"), atomically: true, encoding: .utf8)
-            print("drifted-host: connected, \(table.storedPatternIds.count) patterns stored")
+            log("drifted-host: connected, \(table.storedPatternIds.count) patterns stored")
         }
     }
 
@@ -154,6 +189,7 @@ public final class Daemon {
                 let result = try await work { p in self.update(id) { $0.progress = p } }
                 self.update(id) { $0.state = .done; $0.progress = 1; $0.result = result }
             } catch {
+                self.log("job \(id) (\(kind)) failed: \(error.localizedDescription)")
                 self.update(id) { $0.state = .failed; $0.error = error.localizedDescription }
             }
         }
@@ -194,8 +230,9 @@ public final class Daemon {
                 self.slots.touch(id)
                 return ["id": "\(id)", "uploaded": "false", "hash": hash]
             }
-            let id = self.slots.leastRecentlyUsed(excluding: playing)
-            try await self.table.upload(report.pattern.wirePoints, id: id, progress: { progress($0 * 0.95) })
+            let first = self.slots.leastRecentlyUsed(excluding: Set([playing].compactMap { $0 }))
+            let id = try await self.upload(report.pattern.wirePoints, id: first, progress: { progress($0 * 0.95) },
+                                           alternative: { self.slots.leastRecentlyUsed(excluding: $0.union([playing].compactMap { $0 })) })
             try await self.table.play(id)
             self.slots.assign(id, hash: hash, name: pattern.name)
             return ["id": "\(id)", "uploaded": "true", "hash": hash]
@@ -207,10 +244,33 @@ public final class Daemon {
         guard report.ok else { throw HTTPError(400, report.issues.filter { $0.severity == .error }.map(\.message).joined(separator: "; ")) }
         let hash = PatternValidator.contentHash(report.pattern)
         return enqueue("save") { progress in
-            let id = self.slots.savedId(for: pattern.name, avoiding: self.table.storedPatternIds)
-            try await self.table.upload(report.pattern.wirePoints, id: id, progress: progress)
+            let id = try await self.upload(report.pattern.wirePoints,
+                                           id: self.slots.savedId(for: pattern.name, avoiding: self.table.storedPatternIds),
+                                           progress: progress)
             self.slots.save(id, name: pattern.name, hash: hash)
             return ["id": "\(id)", "name": pattern.name]
+        }
+    }
+
+    /// Uploads, trying up to 3 times (2 s apart) when the table drops the upload or goes quiet rather
+    /// than refusing it (`DriftError.isRetryable`). A rejection at Start can mean the id is stuck
+    /// "drawing" (failure-modes.md), so `alternative`, given the ids tried so far, can pick another
+    /// one for the next try. Returns the id the pattern ended up in.
+    private func upload(_ points: [WirePoint], id first: UInt16, progress: @escaping (Double) -> Void,
+                        alternative: ((Set<UInt16>) -> UInt16)? = nil) async throws -> UInt16 {
+        var id = first, tried: Set<UInt16> = [], attempt = 1
+        while true {
+            do {
+                try await table.upload(points, id: id, progress: progress)
+                return id
+            } catch let error as DriftError where error.isRetryable && attempt < 3 {
+                tried.insert(id)
+                if case .rejected(_, "at Start") = error, let alternative { id = alternative(tried) }
+                attempt += 1
+                log("\(error.localizedDescription); retrying into pattern \(id) in 2 s (attempt \(attempt) of 3)")
+                try await Task.sleep(nanoseconds: 2_000_000_000)
+                guard table.status == .ready else { throw DriftError.notConnected }
+            }
         }
     }
 
@@ -326,10 +386,10 @@ struct SlotStore {
 
     func slot(holding hash: String) -> UInt16? { state.ring.first { $0.hash == hash }?.id }
 
-    func leastRecentlyUsed(excluding playing: UInt16?) -> UInt16 {
-        let candidates = Self.ringIds.filter { $0 != playing }
+    func leastRecentlyUsed(excluding skip: Set<UInt16>) -> UInt16 {
+        let candidates = Self.ringIds.filter { !skip.contains($0) }
         if let empty = candidates.first(where: { id in !state.ring.contains { $0.id == id } }) { return empty }
-        return state.ring.filter { $0.id != playing }.min { $0.lastUsed < $1.lastUsed }!.id
+        return state.ring.filter { !skip.contains($0.id) }.min { $0.lastUsed < $1.lastUsed }?.id ?? Self.ringIds[0]
     }
 
     mutating func assign(_ id: UInt16, hash: String, name: String) {

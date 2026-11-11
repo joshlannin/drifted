@@ -6,6 +6,8 @@ public enum DriftError: LocalizedError {
     case notConnected
     case timeout(String)
     case uploadFailed(String)
+    /// The table sent "upload failed" (0x34/5) for the pattern; `stage` says when (failure-modes.md).
+    case rejected(id: UInt16, stage: String)
     case noStorage
 
     public var errorDescription: String? {
@@ -14,7 +16,16 @@ public enum DriftError: LocalizedError {
         case .notConnected: return "Not connected to a table"
         case .timeout(let s): return "Timed out waiting for \(s)"
         case .uploadFailed(let s): return "Upload failed: \(s)"
+        case .rejected(let id, let stage): return "Upload failed: table rejected pattern \(id) \(stage)"
         case .noStorage: return "Table reports not enough storage space"
+        }
+    }
+
+    /// Worth trying the upload again: the table dropped it or went quiet, rather than refusing it outright.
+    public var isRetryable: Bool {
+        switch self {
+        case .rejected, .timeout: return true
+        default: return false
         }
     }
 }
@@ -275,9 +286,16 @@ public final class DriftTable: NSObject, ObservableObject {
         note("Uploading pattern \(id): \(points.count) points, \(pages.count) pages")
 
         let start = mark()
+        // Where the upload had got to, for the error if the table gives up on it. The table abandons an
+        // upload after 5 s without a message, so the longest gap between pages is the first thing to check.
+        var stage = "at Start"
+        var lastSend = Date()
+        var longestGap = 0.0
         func failure(_ m: TableMessage) -> Error? {
             switch m {
-            case .uploadFailed(let x) where x == id: return DriftError.uploadFailed("table rejected pattern \(id)")
+            case .uploadFailed(let x) where x == id:
+                note("Table rejected pattern \(id) \(stage)")
+                return DriftError.rejected(id: id, stage: stage)
             case .noStorage(let x) where x == id: return DriftError.noStorage
             default: return nil
             }
@@ -300,6 +318,8 @@ public final class DriftTable: NSObject, ObservableObject {
             }
         }
 
+        stage = "after Start, before the first page"
+        lastSend = Date()
         var pending = Array(pages.indices)
         var delay = pageDelay
         var sent = 0
@@ -307,14 +327,20 @@ public final class DriftTable: NSObject, ObservableObject {
         for attempt in 1...6 {
             for i in pending {
                 for entry in recent where entry.seq > start { if let e = failure(entry.message) { throw e } }
+                let gap = Date().timeIntervalSince(lastSend)
+                longestGap = max(longestGap, gap)
+                if gap > 2 { note(String(format: "Slow upload: %.1f s before page %d", gap, i + 1)) }
                 try await send(Command.page(index: i + 1, points: pages[i]))
+                lastSend = Date()
                 sent += 1
+                stage = String(format: "after page %d of %d (longest gap between pages %.1f s)", i + 1, pages.count, longestGap)
                 progress(min(0.99, Double(sent) / total))
                 if delay > 0 { try await Task.sleep(nanoseconds: UInt64(delay * 1e9)) }
             }
             try await Task.sleep(nanoseconds: 100_000_000)
             let endMark = mark()
             try await send(Command.endUpload(patternId: id, pageCount: pages.count))
+            stage = String(format: "after End (longest gap between pages %.1f s)", longestGap)
             // nil = complete. Only 0x34/3 means stored: if the *last* page(s) were dropped, the table
             // answers 0x34/1 with an empty list and deletes the file 5 s later (docs/failure-modes.md).
             // Treating that empty list as success left unplayable "stored" ids.
