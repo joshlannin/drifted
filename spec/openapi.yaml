@@ -120,7 +120,7 @@ paths:
                 breathing: { type: boolean }
                 random: { type: boolean }
                 loop: { type: boolean }
-                power: { type: boolean }
+                power: { type: boolean, description: "Sends 0x14/16. false only pauses; it is not a real power-off (docs/protocol.md)" }
       responses: { "200": { description: Job } }
   /jobs/{id}:
     get:

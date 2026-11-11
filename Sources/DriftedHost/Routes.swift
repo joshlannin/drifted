@@ -154,6 +154,9 @@ extension Daemon {
             let brightness = s.brightness ?? (table.tableState.map { Double($0.brightness) / 100 } ?? 1)
             out.append(Command.lightMode(shifting: s.shifting ?? false, shiftTime: UInt16(s.shiftSeconds ?? 0),
                                          breathing: s.breathing ?? false, brightness: brightness))
+            // 0x11/4 alone doesn't relight a lamp turned off with 0x14/7 0 (see Command.brightness), so set the
+            // live level too.
+            out.append(Command.brightness(brightness))
         }
         if let v = s.random { out.append(Command.randomMode(v)) }
         if let v = s.loop { out.append(Command.loopMode(v)) }

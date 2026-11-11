@@ -73,12 +73,12 @@ answering the ~2 Hz state broadcast with ConfirmData, which keeps the session al
 | 0x14 | 3 | play/pause toggle | – |
 | 0x14 | 4 / 5 | next / previous | – |
 | 0x14 | 6 | speed | `u8`, raw 30..75 (30 + p·45 for p in 0..1) |
-| 0x14 | 7 | brightness | `u8` 0..100 |
+| 0x14 | 7 | brightness (live lamp level) | `u8` 0..100. 0 turns the lamp off; it stays off until this is sent again non-zero, even after `0x11/4`. Send it after `0x11/4` with the same level.¹ |
 | 0x14 | 10 / 11 | random / loop mode | bool |
 | 0x14 | 12 | *reserved: appears to reset the controller. Untested; don't send.* | |
 | 0x14 | 13 | **select palette colour by name** | string |
 | 0x14 | 15 | **show colour and store it as palette entry "Temp"** | `enable:bool, r, g, b` |
-| 0x14 | 16 | power | bool |
+| 0x14 | 16 | "power" | bool. Not a real power-off: `false` only pauses the ball, and the state's `powerOn` stays true.¹ |
 | 0x15 | 1..5 | firmware update. **Never send these.** | |
 | 0x16 | 1 | light flags | 4 bytes: breathing, shifting, shiftTime u16 |
 | 0x50 | 2 | confirm connection | bool `true` |
@@ -87,11 +87,14 @@ A fixed custom colour is three packets: `0x14/15 01 rr gg bb`, then `0x14/13 "Te
 `0x11/4 00 00 00 00 <brightness>` (shifting and breathing off). Leaving out the `enable` byte in `0x14/15`
 shifts the colour bytes by one (white becomes yellow).
 
+¹ Reported by [ha-homedics-drift](https://github.com/afcragg78/ha-homedics-drift), a Home Assistant
+integration built from these docs, on an ST-300. Not yet confirmed on our test table.
+
 ## Messages: table → host
 
 | cmd | action | meaning |
 |---|---|---|
-| 0x30 | 1..4 | playlists |
+| 0x30 | 1..4 | playlists: strings and u16 arrays in pages, but the exact layout isn't pinned down. Parse defensively (ha-homedics-drift tries several layouts). |
 | 0x31 | 1..4 | colours: `0x31/3 page:u8, count:u8, count × (name:string, r, g, b)`; `0x31/4` echoes light mode |
 | 0x32 | 1 / 2 | sleep schedule / **asks for the current time** |
 | 0x33 | 1..3 | stored pattern ids: start, end, data `page:u8, ids:u16 array`. Re-sent after uploads and deletes. |

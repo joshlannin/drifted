@@ -15,6 +15,7 @@ public struct TableState: Equatable {
     public var sleepEnabled: Bool
     public var controllerVersion: String?
     public var driverVersion: String?
+    /// Reportedly stays true after `Command.power(false)`, which only pauses (see there). Don't use it as an on/off state.
     public var poweredOn: Bool?
 }
 

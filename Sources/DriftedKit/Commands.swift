@@ -134,7 +134,11 @@ public enum Command {
         return make(userActions, 6) { $0.u8(UInt8(raw)) }
     }
 
-    /// `fraction` 0…1 maps to 0…100.
+    /// Live lamp level (0x14/7). `fraction` 0…1 maps to 0…100.
+    ///
+    /// Reported by ha-homedics-drift (not yet confirmed here): 0 turns the lamp off, and it stays off until
+    /// 0x14/7 is sent again with a non-zero level. Setting light mode (0x11/4) alone doesn't relight it, so
+    /// send this after `lightMode` with the same level.
     public static func brightness(_ fraction: Double) -> Packet {
         make(userActions, 7) { $0.u8(UInt8(max(0, min(1, fraction)) * 100)) }
     }
@@ -157,5 +161,8 @@ public enum Command {
 
     public static func randomMode(_ on: Bool) -> Packet { make(userActions, 10) { $0.bool(on) } }
     public static func loopMode(_ on: Bool) -> Packet { make(userActions, 11) { $0.bool(on) } }
+    /// 0x14/16. Despite the name, it isn't a real power-off. Reported by ha-homedics-drift on an ST-300 (not yet
+    /// confirmed here): `false` only pauses the ball, and the state's `powerOn` stays true. To "turn the table off",
+    /// pause and set brightness 0 instead.
     public static func power(_ on: Bool) -> Packet { make(userActions, 16) { $0.bool(on) } }
 }
