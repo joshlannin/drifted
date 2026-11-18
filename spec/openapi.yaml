@@ -21,6 +21,10 @@ components:
         points: { type: array, items: { type: array, items: { type: number }, minItems: 2, maxItems: 2 } }
         thr: { type: string }
         clear: { type: string, enum: [none, area, full], description: "show/validate/preview: sweep the sand first" }
+    Switch:
+      type: object
+      properties: { on: { type: boolean } }
+      required: [on]
     Job:
       type: object
       properties:
@@ -122,6 +126,23 @@ paths:
                 loop: { type: boolean }
                 power: { type: boolean, description: "Sends 0x14/16. false only pauses; it is not a real power-off (docs/protocol.md)" }
       responses: { "200": { description: Job } }
+  /power:
+    get: { summary: "Power switch: {on}. Apple Home and the like poll this", responses: { "200": { description: "{ on }" } } }
+    post:
+      summary: Turn the table on or off. Off stops the ball where it is (0x14/16 false) and keeps it stopped until on or a drawing request
+      description: Answers at once. sent=false means the table is reconnecting; an off is re-sent on every reconnect. POST /power/on and /power/off take no body.
+      requestBody: { content: { application/json: { schema: { $ref: "#/components/schemas/Switch" } } } }
+      responses: { "200": { description: "{ on, sent }" } }
+  /power/on: { post: { summary: 'Same as POST /power {"on":true}', responses: { "200": { description: "{ on, sent }" } } } }
+  /power/off: { post: { summary: 'Same as POST /power {"on":false}', responses: { "200": { description: "{ on, sent }" } } } }
+  /lamp:
+    get: { summary: "Lamp switch: {on}. Separate from power", responses: { "200": { description: "{ on }" } } }
+    post:
+      summary: Turn the lamp on (at its last brightness) or off (0x14/7). An off is re-sent on every reconnect
+      requestBody: { content: { application/json: { schema: { $ref: "#/components/schemas/Switch" } } } }
+      responses: { "200": { description: "{ on, sent }" } }
+  /lamp/on: { post: { summary: 'Same as POST /lamp {"on":true}', responses: { "200": { description: "{ on, sent }" } } } }
+  /lamp/off: { post: { summary: 'Same as POST /lamp {"on":false}', responses: { "200": { description: "{ on, sent }" } } } }
   /jobs/{id}:
     get:
       parameters: [{ name: id, in: path, required: true, schema: { type: integer } }]

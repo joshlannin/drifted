@@ -283,7 +283,31 @@ public final class DriftTable: NSObject, ObservableObject {
 
     // MARK: High level
 
-    public func play(_ id: UInt16) async throws { try await send(Command.drawPattern(id)) }
+    /// Starts a stored pattern. With `verify`, waits for the state broadcast to show it drawing and sends it
+    /// again if not: after a pause the table ignores the first play or two (it un-pauses into the old pattern
+    /// without moving), and after power(false) only play/pause un-pauses it (seen on hardware, 2026-11-18).
+    /// It also covers a play lost on a weak link. Live streaming skips this to keep its timing.
+    public func play(_ id: UInt16, verify: Bool = true) async throws {
+        guard verify else { return try await send(Command.drawPattern(id)) }
+        if let s = tableState, s.status != 1, s.patternId != 0, s.patternId != id {
+            note("Table is paused in pattern \(s.patternId); un-pausing before playing \(id)")
+            try await send(Command.playPause)
+            try await Task.sleep(nanoseconds: 1_500_000_000)
+        }
+        for attempt in 1...4 {
+            let m = mark()
+            try await send(Command.drawPattern(id))
+            do {
+                _ = try await waitFor(after: m, timeout: 4, what: "pattern \(id) to start") { msg -> Bool? in
+                    if case .state(let s) = msg, s.patternId == id, s.status == 1 { return true }
+                    return nil
+                }
+                return
+            } catch DriftError.timeout where attempt < 4 {
+                note("Table didn't start pattern \(id); sending play again (attempt \(attempt + 1))")
+            }
+        }
+    }
 
     /// Picks an unused id (≥ 50000 unless told otherwise), avoiding ids the table reported.
     public func freePatternId(startingAt start: UInt16 = 50000) -> UInt16 {

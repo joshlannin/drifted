@@ -75,6 +75,10 @@ let tools: [[String: Any]] = [
     ["name": "live_push", "description": "Queue a live segment. interrupt=true cuts in as soon as it's uploaded (about 1-2 s). Keep about two segments queued.",
      "inputSchema": schema(drawingSchema.merging(["interrupt": ["type": "boolean"]]) { $1 })],
     ["name": "live_stop", "description": "End the live session and restore random/loop settings.", "inputSchema": schema([:])],
+    ["name": "power", "description": "The table's on/off switch (the same one Apple Home uses). on=false stops the ball where it is; it stays stopped until turned on or a drawing is shown. Omit 'on' to read it.",
+     "inputSchema": schema(["on": ["type": "boolean"]])],
+    ["name": "lamp", "description": "The table's lamp switch, separate from power. on=true relights it at its last brightness; use settings for colour and brightness. Omit 'on' to read it.",
+     "inputSchema": schema(["on": ["type": "boolean"]])],
     ["name": "connection", "description": "connect or disconnect drifted-host from the table (disconnect lets the official app connect).",
      "inputSchema": schema(["action": ["type": "string", "enum": ["connect", "disconnect"]]], required: ["action"])],
 ]
@@ -133,6 +137,9 @@ func run(_ name: String, _ a: [String: Any]) async throws -> [[String: Any]] {
     case "live_start": return try text(try await call("POST", "/live/start"))
     case "live_push": return try text(try await call("POST", "/live/segments", json: drawingBody(a)))
     case "live_stop": return try text(try await call("POST", "/live/stop"))
+    case "power", "lamp":
+        guard let on = a["on"] as? Bool else { return try text(try await call("GET", "/\(name)")) }
+        return try text(try await call("POST", "/\(name)", json: ["on": on]))
     case "connection":
         let action = a["action"] as? String ?? ""
         guard ["connect", "disconnect"].contains(action) else { throw ToolError(message: "action must be connect or disconnect") }

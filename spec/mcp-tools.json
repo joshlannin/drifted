@@ -406,6 +406,32 @@
       "name": "live_stop"
     },
     {
+      "description": "The table's on/off switch (the same one Apple Home uses). on=false stops the ball where it is; it stays stopped until turned on or a drawing is shown. Omit 'on' to read it.",
+      "inputSchema": {
+        "properties": {
+          "on": {
+            "type": "boolean"
+          }
+        },
+        "required": [],
+        "type": "object"
+      },
+      "name": "power"
+    },
+    {
+      "description": "The table's lamp switch, separate from power. on=true relights it at its last brightness; use settings for colour and brightness. Omit 'on' to read it.",
+      "inputSchema": {
+        "properties": {
+          "on": {
+            "type": "boolean"
+          }
+        },
+        "required": [],
+        "type": "object"
+      },
+      "name": "lamp"
+    },
+    {
       "description": "connect or disconnect drifted-host from the table (disconnect lets the official app connect).",
       "inputSchema": {
         "properties": {

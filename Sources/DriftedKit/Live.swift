@@ -166,7 +166,7 @@ public final class LiveSession {
     private func playQueued() async throws {
         guard var q = queued else { return }
         queued = nil
-        try await table.play(q.id)
+        try await table.play(q.id, verify: false)
         q.playedAt = Date(); q.progressChanged = Date()
         playing = q
         onEvent(.playing(segment: q.segment.index, slot: q.id))

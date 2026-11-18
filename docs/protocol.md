@@ -78,7 +78,7 @@ answering the ~2 Hz state broadcast with ConfirmData, which keeps the session al
 | 0x14 | 12 | *reserved: appears to reset the controller. Untested; don't send.* | |
 | 0x14 | 13 | **select palette colour by name** | string |
 | 0x14 | 15 | **show colour and store it as palette entry "Temp"** | `enable:bool, r, g, b` |
-| 0x14 | 16 | "power" | bool. Not a real power-off: `false` only pauses the ball, and the state's `powerOn` stays true.¹ |
+| 0x14 | 16 | "power" | bool. Not a real power-off: `false` only pauses the ball (confirmed: it stops within a second, status 0, progress frozen), and the state's `powerOn` stays true.¹ `true` doesn't resume it, and plays are ignored until a play/pause (`0x14/3`); see failure-modes.md. |
 | 0x15 | 1..5 | firmware update. **Never send these.** | |
 | 0x16 | 1 | light flags | 4 bytes: breathing, shifting, shiftTime u16 |
 | 0x50 | 2 | confirm connection | bool `true` |

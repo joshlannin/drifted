@@ -27,6 +27,7 @@ public final class Daemon {
     public let config: Config
     public let token: String
     var slots: SlotStore
+    private(set) var switches: Switches
     private var wantConnected = true
     private var sse: [ObjectIdentifier: SSEClient] = [:]
     private var jobs: [Int: Job] = [:]
@@ -43,6 +44,7 @@ public final class Daemon {
         try FileManager.default.createDirectory(at: config.stateDir, withIntermediateDirectories: true)
         token = try Self.loadToken(config.stateDir.appendingPathComponent("token"))
         slots = SlotStore(file: config.stateDir.appendingPathComponent("slots.json"))
+        switches = Switches.load(config.stateDir.appendingPathComponent("switches.json"))
         logFile = config.stateDir == Self.defaultStateDir
             ? FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Logs/Drifted/drifted-host.log")
             : config.stateDir.appendingPathComponent("drifted-host.log")
@@ -103,7 +105,10 @@ public final class Daemon {
 
     public func start() async throws {
         try await table.waitForPoweredOn()
-        table.$status.sink { [weak self] s in self?.emit("connection", ["status": "\(s)"]) }.store(in: &bag)
+        table.$status.sink { [weak self] s in
+            self?.emit("connection", ["status": "\(s)"])
+            if s == .ready { self?.reassertSwitches() }
+        }.store(in: &bag)
         table.$tableState.sink { [weak self] s in if let s { self?.stateChanged(s) } }.store(in: &bag)
         table.$lastAlarm.sink { [weak self] a in if let a { self?.alarm(a) } }.store(in: &bag)
         Task { await supervise() }
@@ -172,6 +177,10 @@ public final class Daemon {
     }
 
     private func stateChanged(_ s: TableState) {
+        if s.brightness > 0, switches.lamp, abs(switches.lampLevel - Double(s.brightness) / 100) > 0.005 {
+            switches.lampLevel = Double(s.brightness) / 100
+            switches.save()
+        }
         let key = "\(s.patternId)/\(s.status)"
         if key != lastStateKey || Date().timeIntervalSince(lastProgressEvent) >= 1 {
             lastStateKey = key; lastProgressEvent = Date()
@@ -250,6 +259,7 @@ public final class Daemon {
         guard report.ok else { throw HTTPError(400, report.issues.filter { $0.severity == .error }.map(\.message).joined(separator: "; ")) }
         let hash = PatternValidator.contentHash(report.pattern)
         return enqueue("show") { progress in
+            try await self.wakeForDrawing()
             let playing = self.table.tableState.flatMap { $0.status == 1 ? $0.patternId : nil }
             if let id = self.slots.slot(holding: hash), self.table.storedPatternIds.contains(id) {
                 try await self.table.play(id)
@@ -324,6 +334,69 @@ public final class Daemon {
         if !on { table.disconnect() }
     }
 
+    // MARK: Switches
+
+    /// Power: off stops the ball where it is (0x14/16 false, a pause). It stays off until turned on or a
+    /// drawing is requested. Saved, so a restart overnight doesn't start drawing again.
+    func setPower(_ on: Bool) {
+        powerSetBySettings(on)
+        guard table.status == .ready else { return }   // "off" is sent when the table reconnects (reassertSwitches)
+        Task { try? await self.table.send(Command.power(on)) }
+    }
+
+    /// Records the power switch without sending anything (/settings sends its own packet).
+    func powerSetBySettings(_ on: Bool) {
+        guard switches.power != on else { return }
+        switches.power = on
+        switches.save()
+        log("power \(on ? "on" : "off")")
+        emit("power", ["on": on])
+    }
+
+    /// Lamp: on relights it at its last level, off sets the live level to 0 (0x14/7). Independent of power.
+    func setLamp(_ on: Bool) {
+        switches.lamp = on
+        switches.save()
+        log("lamp \(on ? "on" : "off")")
+        emit("lamp", ["on": on])
+        guard table.status == .ready else { return }
+        let level = on ? max(0.01, switches.lampLevel) : 0
+        Task { try? await self.table.send(Command.brightness(level)) }
+    }
+
+    /// The link drops often at the edge of range, and a command sent just before a drop can be lost, so
+    /// "off" is re-sent on every reconnect. "On" isn't: that would undo changes made in the HoMedics app.
+    private func reassertSwitches() {
+        var packets: [Packet] = []
+        if !switches.power { packets.append(Command.power(false)) }
+        if !switches.lamp { packets.append(Command.brightness(0)) }
+        guard !packets.isEmpty else { return }
+        Task { for p in packets { try? await self.table.send(p) } }
+    }
+
+    /// Asking for a drawing means "on": un-pause first if the power switch is off.
+    func wakeForDrawing() async throws {
+        guard !switches.power else { return }
+        powerSetBySettings(true)
+        try await table.send(Command.power(true))
+    }
+
+    /// Keeps `switches.lamp` in step when brightness is set through /settings.
+    func lampSetBySettings(brightness: Double) {
+        let on = brightness > 0
+        if on { switches.lampLevel = brightness }
+        if switches.lamp != on { switches.lamp = on; emit("lamp", ["on": on]) }
+        switches.save()
+    }
+
+    func play(_ id: UInt16) -> Job {
+        enqueue("play") { _ in
+            try await self.wakeForDrawing()
+            try await self.table.play(id)
+            return nil
+        }
+    }
+
     // MARK: Live
 
     func liveStart() async throws {
@@ -333,6 +406,7 @@ public final class Daemon {
         session.onEvent = { [weak self] e in self?.emit("live", ["event": "\(e)"]) }
         // Live owns the table: wait for queued jobs to drain first.
         await jobChain.value
+        try await wakeForDrawing()
         try await session.start()
         live = session
     }
@@ -361,6 +435,8 @@ public final class Daemon {
             "connection": "\(table.status)",
             "device": table.connectedName ?? NSNull(),
             "rssi": table.rssi ?? NSNull(),
+            "power": switches.power,
+            "lamp": switches.lamp,
             "storedPatterns": table.storedPatternIds.count,
             "live": live.map { ["running": true, "depth": $0.depth] as [String: Any] } ?? ["running": false],
             "alarms": reportedAlarms.sorted().map { ["code": Int($0), "name": TableAlarm.codeNames[$0] ?? "?"] },
@@ -395,7 +471,30 @@ public final class Daemon {
     }
 }
 
-/// drifted-host's only persistent state: which drawing each ring slot holds, and saved patterns.
+/// The power and lamp switches (for Apple Home through Homebridge, or anything else), saved across restarts.
+struct Switches: Codable {
+    var power = true
+    var lamp = true
+    /// Last non-zero lamp level (0-1), used to relight it.
+    var lampLevel = 0.5
+    var file: URL?
+
+    enum CodingKeys: String, CodingKey { case power, lamp, lampLevel }
+
+    static func load(_ file: URL) -> Switches {
+        var s = (try? JSONDecoder().decode(Switches.self, from: Data(contentsOf: file))) ?? Switches()
+        s.file = file
+        return s
+    }
+
+    func save() {
+        guard let file else { return }
+        let enc = JSONEncoder(); enc.outputFormatting = [.prettyPrinted, .sortedKeys]
+        try? enc.encode(self).write(to: file, options: .atomic)
+    }
+}
+
+/// drifted-host's other persistent state: which drawing each ring slot holds, and saved patterns.
 /// Losing the file costs at most one extra upload per slot.
 struct SlotStore {
     struct Entry: Codable { var id: UInt16; var hash: String; var name: String; var lastUsed: Date }

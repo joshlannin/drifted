@@ -24,6 +24,8 @@ struct PatternInput: Decodable {
     }
 }
 
+struct SwitchInput: Decodable { var on: Bool }
+
 struct SettingsInput: Decodable {
     var speed: Double?
     var brightness: Double?
@@ -109,12 +111,29 @@ extension Daemon {
         case ("POST", ["play"]):
             struct Body: Decodable { var id: UInt16 }
             guard !liveRunning else { throw HTTPError(409, "a live session is running") }
-            return try await jobResponse(command("play", [Command.drawPattern(try req.json(Body.self).id)]), req, wait: true)
+            return try await jobResponse(play(try req.json(Body.self).id), req, wait: true)
         case ("POST", ["pause"]): return try await jobResponse(command("pause", [Command.playPause]), req, wait: true)
         case ("POST", ["next"]): return try await jobResponse(command("next", [Command.next]), req, wait: true)
         case ("POST", ["previous"]): return try await jobResponse(command("previous", [Command.previous]), req, wait: true)
         case ("PUT", ["settings"]):
-            return try await jobResponse(command("settings", try settingsPackets(try req.json(SettingsInput.self))), req, wait: true)
+            let input = try req.json(SettingsInput.self)
+            let packets = try settingsPackets(input)
+            if let b = input.brightness { lampSetBySettings(brightness: b) }
+            if let p = input.power { powerSetBySettings(p) }
+            return try await jobResponse(command("settings", packets), req, wait: true)
+
+        // Switches for Apple Home / Homebridge: GET for status, POST {"on": bool} or POST /power/on|off.
+        // They answer at once; if the table is reconnecting, the change is sent when it's back.
+        case ("GET", ["power"]): return .json(["on": switches.power])
+        case ("GET", ["lamp"]): return .json(["on": switches.lamp])
+        case ("POST", ["power"]), ("PUT", ["power"]):
+            setPower(try req.json(SwitchInput.self).on); return switchResponse(switches.power)
+        case ("POST", ["lamp"]), ("PUT", ["lamp"]):
+            setLamp(try req.json(SwitchInput.self).on); return switchResponse(switches.lamp)
+        case ("POST", ["power", "on"]): setPower(true); return switchResponse(true)
+        case ("POST", ["power", "off"]): setPower(false); return switchResponse(false)
+        case ("POST", ["lamp", "on"]): setLamp(true); return switchResponse(true)
+        case ("POST", ["lamp", "off"]): setLamp(false); return switchResponse(false)
 
         case ("POST", ["live", "start"]):
             try await liveStart(); return .json(["ok": true])
@@ -129,6 +148,10 @@ extension Daemon {
         default:
             throw HTTPError(404, "no route for \(req.method) \(req.path)")
         }
+    }
+
+    private func switchResponse(_ on: Bool) -> HTTPResponse {
+        .json(["on": on, "sent": table.status == .ready])
     }
 
     /// Long jobs answer 202 with the queued job unless `?wait=true`; quick commands always wait.
