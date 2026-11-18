@@ -1,10 +1,20 @@
 #!/usr/bin/env python3
 """Weather: an emblem for the day's conditions, under the forecast high in big digits.
 
-    sunny   a sun with pointed rays; ripples spread from it across the table
-    cloudy  two clouds floating in drifting wind lines
-    rain    a cloud and raindrops, left smooth in slanting rain
-    snow    a big snowflake and two small ones, in gently drifting lines
+    sunny         a sun with pointed rays; ripples spread from it across the table
+    partlycloudy  a sun with a cloud across some of its rays
+    cloudy        two clouds floating in drifting wind lines
+    fog           three flat banks of mist in close wavy lines
+    rain          a cloud and raindrops, left smooth in slanting rain
+    heavy_rain    the same with five smaller drops in heavier rain
+    thunderstorm  a cloud and a lightning bolt in slanting rain
+    sleet         a cloud, raindrops and small snowflakes
+    hail          a cloud and round hailstones
+    snow          a big snowflake and two small ones, in gently drifting lines
+    clear_night   a crescent moon and three small stars
+
+partlycloudy, fog, heavy_rain, thunderstorm, sleet, hail and clear_night are from afcragg78's
+Home Assistant integration (https://github.com/afcragg78/ha-homedics-drift), MIT licensed.
 
 Shapes and the temperature sit on swept, smooth sand; everything else is textured. Background
 lines flow around each shape instead of through it, which is what outlines the shape. The ball
@@ -178,6 +188,90 @@ def flake(c, r, tilt=math.pi / 2, twigs=True):
         return pts[:-1] + [polar(c, r, phi)]   # the last arm runs on out to the corner
 
     return Shape(c, radius, snap, detail)
+
+
+def bolt(c, scale=1.0):
+    """A lightning bolt: an oval swept smooth with a bold zigzag in it, drawn like the digits.
+    (A bolt-shaped region doesn't work: the sweep spiral fills its notches like a fingerprint.)"""
+    rx, ry = 0.2 * scale, 0.36 * scale
+    zigzag = [(c[0] + x * scale, c[1] + y * scale)
+              for x, y in ((0.07, 0.28), (-0.08, 0.01), (0.07, 0.03), (-0.06, -0.29))]
+
+    def radius(phi):
+        return rx * ry / math.hypot(ry * math.cos(phi), rx * math.sin(phi))
+
+    def detail(phi):  # in at the top, the stroke bold, back up it and out where we came in
+        z = densify(zigzag)
+        return [z[0]] + bold(z) + z[::-1] + [polar(c, radius(phi), phi)]
+
+    return Shape(c, radius, lambda phi: math.atan2(zigzag[0][1] - c[1], zigzag[0][0] - c[0]), detail)
+
+
+def crescent(c, scale=0.86, tilt=0.55):
+    """A crescent moon: one circle minus a second that bites into it. `c` sits in the thick of
+    it, where every direction meets the edge once. `tilt` turns the horns (0 opens right)."""
+    ct, st = math.cos(tilt), math.sin(tilt)
+    outer, inner = (0.22 * scale * ct, 0.22 * scale * st), (0.4 * scale * ct, 0.4 * scale * st)
+    outer_r, inner_r = 0.34 * scale, 0.28 * scale
+
+    def hits(cx, cy, r, phi):
+        b = cx * math.cos(phi) + cy * math.sin(phi)
+        disc = b * b - (cx * cx + cy * cy - r * r)
+        if disc < 1e-12:
+            return []
+        return [t for t in (b - math.sqrt(disc), b + math.sqrt(disc)) if t > 1e-5]
+
+    def radius(phi):
+        u = (math.cos(phi), math.sin(phi))
+        found = [t for t in hits(*outer, outer_r, phi)
+                 if math.dist((t * u[0], t * u[1]), inner) >= inner_r - 1e-4]
+        found += [t for t in hits(*inner, inner_r, phi)
+                  if math.dist((t * u[0], t * u[1]), outer) <= outer_r + 1e-4]
+        return min(found) if found else outer_r
+
+    return Shape(c, radius)
+
+
+def sun_behind(c, cover, r_in=0.15, r_out=0.32, rays=12, disc=0.13):
+    """The sun with any ray that would reach into `cover` (a cloud) cut short just before it.
+    Drawn before the cloud, so the shortened rays read as going behind it."""
+    def raw(phi):
+        u = (phi * rays / (2 * math.pi)) % 1
+        return r_in + (r_out - r_in) * abs(2 * u - 1)
+
+    def radius(phi):
+        base, u = raw(phi), (math.cos(phi), math.sin(phi))
+        at = lambda t: (c[0] + u[0] * t, c[1] + u[1] * t)
+        hit = next((base * i / 24 for i in range(1, 25) if cover.contains(at(base * i / 24))), None)
+        if hit is None:
+            return base
+        lo, hi = 0.0, hit
+        for _ in range(16):
+            mid = (lo + hi) / 2
+            lo, hi = (lo, mid) if cover.contains(at(mid)) else (mid, hi)
+        return max(0.05, lo - 0.02)
+
+    def snap(phi):
+        return (math.floor(phi * rays / (2 * math.pi)) + 0.5) * 2 * math.pi / rays
+
+    def detail(phi):
+        n = int(2 * math.pi * disc / STEP)
+        return [polar(c, disc, phi + 2 * math.pi * i / n) for i in range(n + 1)] + [polar(c, radius(phi), phi)]
+
+    return Shape(c, radius, snap, detail)
+
+
+def pebble(c, r):
+    """A round hailstone."""
+    return Shape(c, lambda phi: r)
+
+
+def bank(c, w, h, waves=3.0, phase=0.0):
+    """A flat bank of mist: a wide, low ellipse with a wavy edge."""
+    def radius(phi):
+        a, b = w / 2, h / 2
+        return a * b / math.hypot(b * math.cos(phi), a * math.sin(phi)) * (1 + 0.12 * math.sin(waves * phi + phase))
+    return Shape(c, radius)
 
 
 # ---------------------------------------------------------------------------------------------
@@ -494,7 +588,50 @@ def scene(name):
                   flake((0.66, -0.22), 0.17, twigs=False)]
         # Snow drifting down: wavy vertical lines, which also cross the moves between the flakes.
         return shapes, [(parallel_rows(90, 0.085, lambda s, k: 0.03 * math.sin(5 * s + 0.7 * k)), Frame())]
-    raise SystemExit(f"unknown condition {name!r}: sunny, cloudy, rain or snow")
+    if name == "partlycloudy":
+        # Sun first, then the cloud, whose sweep covers where the cut-short rays end.
+        cover = cloud((0.26, -0.3), 0.76, 0.3, 3, 0.7)
+        day = sun_behind((-0.22, -0.42), cover)
+        return [day, cover], [(ring_rows(day.c, day.rmax + 0.05, 0.09), Frame())]
+    if name == "thunderstorm":
+        # Laid out like rain: slanting rain below the cloud's base, quiet sky above it. The rain
+        # slants against the bolt's long edges; parallel to them, it swallows the bolt.
+        base = -0.29
+        return [cloud((0, -0.16), 0.88, 0.3), bolt((0, -0.6), 0.95)], [
+            (parallel_rows(110, 0.095), Frame(hi=base)),
+            (parallel_rows(0, 0.085, lambda s, k: 0.012 * math.sin(2.3 * s + 0.3 * k)), Frame(lo=base))]
+    if name == "heavy_rain":
+        base = -0.34
+        drops = [drop((x, -0.58 - 0.06 * (i % 2)), tip=0.16) for i, x in enumerate((-0.46, -0.23, 0, 0.23, 0.46))]
+        return [cloud((0, -0.2), 0.9, 0.3), *drops], [
+            (parallel_rows(74, 0.07), Frame(hi=base)), (parallel_rows(0, 0.09), Frame(lo=base))]
+    if name == "sleet":
+        base = -0.36
+        shapes = [cloud((0, -0.22), 0.8, 0.3), drop((-0.34, -0.62), tip=0.2),
+                  flake((-0.08, -0.66), 0.16, twigs=False), drop((0.2, -0.7), tip=0.18),
+                  flake((0.42, -0.58), 0.13, twigs=False)]
+        return shapes, [(parallel_rows(78, 0.09), Frame(hi=base)), (parallel_rows(0, 0.09), Frame(lo=base))]
+    if name == "hail":
+        base = -0.36
+        stones = [pebble((-0.4, -0.6), 0.13), pebble((0, -0.7), 0.14), pebble((0.4, -0.6), 0.13)]
+        return [cloud((0, -0.22), 0.82, 0.3), *stones], [
+            (parallel_rows(68, 0.1), Frame(hi=base)),
+            (parallel_rows(0, 0.09, lambda s, k: 0.01 * math.sin(2.2 * s + 0.3 * k)), Frame(lo=base))]
+    if name == "fog":
+        # Flat wavy banks, stacked, with close mist lines flowing round them.
+        banks = [bank((0.04, -0.24), 0.9, 0.15, 2.4, 0.3), bank((-0.1, -0.46), 0.62, 0.14, 2.8, 1.2),
+                 bank((0.02, -0.68), 0.98, 0.15, 2.2, 2.1)]
+        return banks, [(parallel_rows(0, 0.058, lambda s, k: 0.026 * math.sin(3.3 * s + 0.55 * k)), Frame())]
+    if name == "clear_night":
+        stars = [sun((0.42, -0.24), 0.09, 0.22, rays=5, disc=0.04),
+                 sun((0.4, -0.68), 0.08, 0.19, rays=5, disc=0.035)]
+        return [crescent((-0.3, -0.44), 1.2, 0.3), *stars], [
+            (parallel_rows(0, 0.072, lambda s, k: 0.01 * math.sin(2 * s + 0.3 * k)), Frame())]
+    raise SystemExit(f"unknown condition {name!r}: {', '.join(CONDITIONS)}")
+
+
+CONDITIONS = ("sunny", "partlycloudy", "cloudy", "fog", "rain", "heavy_rain", "thunderstorm", "sleet",
+              "hail", "snow", "clear_night")
 
 
 def build(condition, value):
