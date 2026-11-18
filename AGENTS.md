@@ -49,7 +49,7 @@ other computer┘     local API :8765, token auth
 | Is Drifted installed? | `/Applications/Drifted.app` exists |
 | Is it running and connected? | A Drifted icon in the menu bar; its menu shows the connection state. Or `GET localhost:8765/status` with the token (below): `"connection": "ready"` means connected |
 | Is your AI connected to it? | You can see the drifted tools (`get_status`, `show_pattern`…) |
-| If it won't connect | The menu shows a hint after about a minute. Usual causes: the HoMedics app is still connected, the table is off or out of range, or Bluetooth permission wasn't allowed |
+| If it won't connect, or keeps dropping | The menu shows a hint after about a minute. Usual causes: the HoMedics app is still connected, the table is off or out of range, or Bluetooth permission wasn't allowed. `/status` gives `rssi` (dBm) while connected: below about -85 the link drops now and then. Drifted reconnects and reruns the job, but moving the Mac closer is the real fix |
 
 ```sh
 curl -s -H "Authorization: Bearer $(cat ~/Library/Application\ Support/Drifted/token)" localhost:8765/status

@@ -63,6 +63,9 @@ public final class DriftTable: NSObject, ObservableObject {
     @Published public private(set) var storedPatternIds: Set<UInt16> = []
     @Published public private(set) var log: [LogLine] = []
     @Published public private(set) var connectedName: String?
+    /// Signal strength of the connected table in dBm, read every 30 s. Below about -85 the link is
+    /// marginal: expect dropped connections (the host reconnects and retries jobs).
+    @Published public private(set) var rssi: Int?
 
     /// Show every BLE device while scanning, not just ones that look like a Drift.
     public var scanAll = false
@@ -135,12 +138,23 @@ public final class DriftTable: NSObject, ObservableObject {
         p.delegate = self
         status = .connecting
         connectedName = p.name?.trimmingCharacters(in: .whitespacesAndNewlines)
-        note("Connecting to \(p.name ?? id.uuidString)…")
+        note("Connecting to \(connectedName ?? id.uuidString)…")
         central.connect(p)
     }
 
     public func disconnect() {
         if let p = peripheral { central.cancelPeripheralConnection(p) }
+    }
+
+    /// Gives up on a connection attempt that never got to ready. CoreBluetooth never times out a pending
+    /// connect, and a table that drops the handshake leaves us "handshaking" forever, so the caller
+    /// decides when it has waited long enough.
+    public func abandonConnection(_ reason: String) {
+        guard status != .ready else { return }
+        if case .disconnected = status { return }
+        note("Giving up on this connection attempt: \(reason)")
+        if let p = peripheral { central.cancelPeripheralConnection(p) }
+        status = .disconnected(reason)
     }
 
     /// Waits for the table's init dump to finish (0x4F/1). Returns false on timeout.
@@ -181,8 +195,12 @@ public final class DriftTable: NSObject, ObservableObject {
             offset += chunk.count
             if type == .withoutResponse {
                 while !p.canSendWriteWithoutResponse {
+                    // A disconnect wakes these waiters; without this check the write waited again forever
+                    // and jammed every later job behind it.
+                    guard p.state == .connected else { throw DriftError.notConnected }
                     await withCheckedContinuation { readyToWriteWaiters.append($0) }
                 }
+                guard p.state == .connected else { throw DriftError.notConnected }
                 p.writeValue(chunk, for: c, type: .withoutResponse)
             } else {
                 try await withCheckedThrowingContinuation { cont in
@@ -230,6 +248,7 @@ public final class DriftTable: NSObject, ObservableObject {
         case .initComplete:
             status = .ready
             note("Table init data complete — ready")
+            peripheral?.readRSSI()
         case .state(let s):
             tableState = s
         case .storedPatterns(_, let ids):
@@ -352,6 +371,7 @@ public final class DriftTable: NSObject, ObservableObject {
                 }
             }
             guard let missing = try result.get() else {
+                storedPatternIds.insert(id)
                 progress(1)
                 note("Pattern \(id) stored on table")
                 return
@@ -394,9 +414,10 @@ extension DriftTable: CBCentralManagerDelegate, CBPeripheralDelegate {
     nonisolated public func centralManager(_ central: CBCentralManager, didDiscover peripheral: CBPeripheral,
                                            advertisementData: [String: Any], rssi RSSI: NSNumber) {
         MainActor.assumeIsolated {
-            let name = (advertisementData[CBAdvertisementDataLocalNameKey] as? String) ?? peripheral.name ?? ""
+            let name = ((advertisementData[CBAdvertisementDataLocalNameKey] as? String) ?? peripheral.name ?? "")
+                .trimmingCharacters(in: .whitespacesAndNewlines)
             let services = advertisementData[CBAdvertisementDataServiceUUIDsKey] as? [CBUUID] ?? []
-            let looksLikeDrift = name.trimmingCharacters(in: .whitespaces).hasPrefix("KS") || services.contains(Self.serviceUUID)
+            let looksLikeDrift = name.hasPrefix("KS") || services.contains(Self.serviceUUID)
             guard scanAll || looksLikeDrift else { return }
             peripherals[peripheral.identifier] = peripheral
             let entry = Discovered(id: peripheral.identifier, name: name.isEmpty ? "(unnamed)" : name, rssi: RSSI.intValue)
@@ -426,9 +447,10 @@ extension DriftTable: CBCentralManagerDelegate, CBPeripheralDelegate {
     nonisolated public func centralManager(_ central: CBCentralManager, didDisconnectPeripheral peripheral: CBPeripheral, error: Error?) {
         MainActor.assumeIsolated {
             status = .disconnected(error?.localizedDescription)
+            note("Disconnected\(error.map { ": \($0.localizedDescription)" } ?? "")\(rssi.map { " (last signal \($0) dBm)" } ?? "")")
+            rssi = nil
             writeChar = nil
             parser = PacketParser()
-            note("Disconnected\(error.map { ": \($0.localizedDescription)" } ?? "")")
             for (_, w) in waiters { w.cont.resume(throwing: DriftError.notConnected) }
             waiters = [:]
             writeResponseWaiters.forEach { $0.resume(throwing: DriftError.notConnected) }
@@ -483,6 +505,20 @@ extension DriftTable: CBCentralManagerDelegate, CBPeripheralDelegate {
             guard !writeResponseWaiters.isEmpty else { return }
             let w = writeResponseWaiters.removeFirst()
             if let error { w.resume(throwing: error) } else { w.resume() }
+        }
+    }
+
+    nonisolated public func peripheral(_ peripheral: CBPeripheral, didReadRSSI RSSI: NSNumber, error: Error?) {
+        MainActor.assumeIsolated {
+            guard error == nil, peripheral === self.peripheral, peripheral.state == .connected else { return }
+            let value = RSSI.intValue
+            if value <= -85, rssi.map({ $0 > -85 }) ?? true {
+                note("Weak signal: \(value) dBm. Expect dropped connections; moving the Mac or the table closer helps")
+            }
+            rssi = value
+            DispatchQueue.main.asyncAfter(deadline: .now() + 30) { [weak peripheral] in
+                if let peripheral, peripheral.state == .connected { peripheral.readRSSI() }
+            }
         }
     }
 

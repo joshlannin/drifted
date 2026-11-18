@@ -136,7 +136,22 @@ public final class Daemon {
         if await table.waitUntilReady(timeout: 30) {
             try? target.uuidString.write(to: config.stateDir.appendingPathComponent("device"), atomically: true, encoding: .utf8)
             log("drifted-host: connected, \(table.storedPatternIds.count) patterns stored")
+        } else {
+            // Otherwise a connect that never completes leaves the status at connecting/handshaking,
+            // which supervise() treats as in progress, and we'd never try again.
+            table.abandonConnection("not ready after 30 s")
         }
+    }
+
+    /// Waits for supervise() to (re)connect. False if it hasn't within `timeout`, or a client released the table.
+    private func waitForConnection(timeout: TimeInterval) async -> Bool {
+        let deadline = Date().addingTimeInterval(timeout)
+        while Date() < deadline {
+            if table.status == .ready { return true }
+            if !wantConnected { return false }
+            try? await Task.sleep(nanoseconds: 250_000_000)
+        }
+        return table.status == .ready
     }
 
     private func savedDevice() -> UUID? {
@@ -174,7 +189,10 @@ public final class Daemon {
 
     // MARK: Jobs
 
-    /// Queues `work`; jobs run one at a time, in order.
+    /// Queues `work`; jobs run one at a time, in order. A job waits up to 45 s for the table if it's
+    /// reconnecting, and if the connection drops while it runs, it runs again once the table is back
+    /// (up to 3 times). That's safe for every job: a dropped connection throws before a packet is written,
+    /// and `show` finds a finished upload in its slot instead of uploading it again.
     func enqueue(_ kind: String, _ work: @escaping @MainActor (_ progress: @escaping (Double) -> Void) async throws -> [String: String]?) -> Job {
         let id = nextJob; nextJob += 1
         let job = Job(id: id, kind: kind)
@@ -184,13 +202,21 @@ public final class Daemon {
         jobChain = Task { @MainActor in
             await previous.value
             self.update(id) { $0.state = .running }
-            do {
-                guard self.table.status == .ready else { throw DriftError.notConnected }
-                let result = try await work { p in self.update(id) { $0.progress = p } }
-                self.update(id) { $0.state = .done; $0.progress = 1; $0.result = result }
-            } catch {
-                self.log("job \(id) (\(kind)) failed: \(error.localizedDescription)")
-                self.update(id) { $0.state = .failed; $0.error = error.localizedDescription }
+            var attempt = 1
+            while true {
+                do {
+                    guard await self.waitForConnection(timeout: 45) else { throw DriftError.notConnected }
+                    let result = try await work { p in self.update(id) { $0.progress = p } }
+                    self.update(id) { $0.state = .done; $0.progress = 1; $0.result = result }
+                } catch DriftError.notConnected where attempt < 3 && self.wantConnected {
+                    attempt += 1
+                    self.log("job \(id) (\(kind)): lost the table; running it again once it reconnects (attempt \(attempt) of 3)")
+                    continue
+                } catch {
+                    self.log("job \(id) (\(kind)) failed: \(error.localizedDescription)")
+                    self.update(id) { $0.state = .failed; $0.error = error.localizedDescription }
+                }
+                break
             }
         }
         emit("job", jobJSON(job))
@@ -233,8 +259,9 @@ public final class Daemon {
             let first = self.slots.leastRecentlyUsed(excluding: Set([playing].compactMap { $0 }))
             let id = try await self.upload(report.pattern.wirePoints, id: first, progress: { progress($0 * 0.95) },
                                            alternative: { self.slots.leastRecentlyUsed(excluding: $0.union([playing].compactMap { $0 })) })
-            try await self.table.play(id)
+            // Record the slot before playing, so a retry after a dropped connection just plays it.
             self.slots.assign(id, hash: hash, name: pattern.name)
+            try await self.table.play(id)
             return ["id": "\(id)", "uploaded": "true", "hash": hash]
         }
     }
@@ -333,6 +360,7 @@ public final class Daemon {
         var out: [String: Any] = [
             "connection": "\(table.status)",
             "device": table.connectedName ?? NSNull(),
+            "rssi": table.rssi ?? NSNull(),
             "storedPatterns": table.storedPatternIds.count,
             "live": live.map { ["running": true, "depth": $0.depth] as [String: Any] } ?? ["running": false],
             "alarms": reportedAlarms.sorted().map { ["code": Int($0), "name": TableAlarm.codeNames[$0] ?? "?"] },
