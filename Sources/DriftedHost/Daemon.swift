@@ -501,7 +501,9 @@ struct SlotStore {
     struct State: Codable { var ring: [Entry] = []; var saved: [Entry] = [] }
 
     let file: URL
-    static let ringIds = Array(UInt16(50000)...UInt16(50007))
+    /// Three is enough: one drawing, one just shown, one being uploaded. Table storage is tight (big drawings
+    /// are hundreds of KB), and ids 50003-50007 from older versions are no longer used.
+    static let ringIds = Array(UInt16(50000)...UInt16(50002))
     static let savedStart: UInt16 = 50100
     private(set) var state: State
 
@@ -509,6 +511,7 @@ struct SlotStore {
         self.file = file
         let dec = JSONDecoder(); dec.dateDecodingStrategy = .iso8601
         state = (try? dec.decode(State.self, from: Data(contentsOf: file))) ?? State()
+        state.ring.removeAll { !Self.ringIds.contains($0.id) }
     }
 
     func slot(holding hash: String) -> UInt16? { state.ring.first { $0.hash == hash }?.id }
