@@ -60,7 +60,7 @@ components:
 paths:
   /status:
     get:
-      summary: Connection, current drawing and progress, settings, latched alarms
+      summary: "Connection, current drawing and progress, settings, latched alarms, and link: {via: bluetooth} or {via: relay, relay, relayConnected, tableLink, rssi, wifiRssi, firmware} (rssi is then the relay's signal to the table)"
       responses: { "200": { description: Status } }
   /log:
     get:
@@ -75,6 +75,31 @@ paths:
     post: { summary: Reconnect to the table, responses: { "200": { description: OK } } }
   /disconnect:
     post: { summary: Release the table (e.g. so the HoMedics app can connect), responses: { "200": { description: OK } } }
+  /relay:
+    get:
+      summary: "Drifted relay (relay/README.md): a Wi-Fi board next to the table that holds its Bluetooth link. {enabled, host, port, name, tokenSet, active, connected, relay, status}; status is the relay's own report (link, table, rssi to the table, wifiRssi, firmware, gate, stats)"
+      responses: { "200": { description: Relay setting and status } }
+    put:
+      summary: "Reach the table through a relay (enabled=true) or this Mac's Bluetooth (false). Fields left out stay; host null finds the relay by Bonjour (name, or the first found). Saved as relay.json (0600) in the state dir; the link restarts"
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                enabled: { type: boolean }
+                host: { type: [string, "null"], description: "IP address or host name" }
+                port: { type: [integer, "null"], default: 8766 }
+                name: { type: [string, "null"], description: "Bonjour name, e.g. drifted-relay-1a2b3c" }
+                token: { type: string, minLength: 16, description: "The relay's token (relay/setup.py prints it)" }
+      responses: { "200": { description: Relay setting and status }, "400": { description: Invalid field } }
+  /relay/discover:
+    get: { summary: "Relays advertising _drifted-relay._tcp on the local network (3 s Bonjour browse): {relays: [{name, firmware, proto}]}", responses: { "200": { description: Relays } } }
+  /relay/command:
+    post:
+      summary: "Send the relay a command: scan (answer includes tables), select ADDRESS|NAME (the table it uses; remembered), forget, hold on|off (keep the table linked with no host), status, reboot, ota URL. Use /disconnect and /connect to release or retake the table"
+      requestBody: { content: { application/json: { schema: { type: object, properties: { command: { type: string } }, required: [command] } } } }
+      responses: { "200": { description: "{command, ok, message, tables?}" }, "409": { description: Not connected to a relay } }
   /show:
     post:
       summary: Draw now, via managed slots (validated; reuses a slot that already holds the drawing)

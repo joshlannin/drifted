@@ -106,6 +106,16 @@ let tools: [[String: Any]] = [
      "inputSchema": schema(["on": ["type": "boolean"]])],
     ["name": "connection", "description": "connect or disconnect drifted-host from the table (disconnect lets the official app connect).",
      "inputSchema": schema(["action": ["type": "string", "enum": ["connect", "disconnect"]]], required: ["action"])],
+    ["name": "relay", "description": "A Drifted relay (relay/README.md) is a small Wi-Fi board next to the table that holds its Bluetooth link, for a table out of this Mac's Bluetooth range. get (default): the relay setting and the relay's status (link, its signal to the table, Wi-Fi signal). set: save host/port (or Bonjour name) and token, and enabled=true to reach the table through it (false: this Mac's Bluetooth); the link restarts. discover: relays on the network. command: send the relay scan, select ADDRESS|NAME (which table it uses), forget, hold on|off, status, reboot or ota URL.",
+     "inputSchema": schema([
+        "action": ["type": "string", "enum": ["get", "set", "discover", "command"]],
+        "enabled": ["type": "boolean"],
+        "host": ["type": ["string", "null"], "description": "Relay IP address or host name; null to find it by Bonjour"],
+        "port": ["type": "integer", "description": "Default 8766"],
+        "name": ["type": ["string", "null"], "description": "Bonjour name, e.g. drifted-relay-1a2b3c (see discover)"],
+        "token": ["type": "string", "description": "The relay's token (relay/setup.py printed it)"],
+        "command": ["type": "string", "description": "For action=command"],
+     ])],
 ]
 
 func drawingBody(_ a: [String: Any]) -> [String: Any] {
@@ -179,6 +189,13 @@ func run(_ name: String, _ a: [String: Any]) async throws -> [[String: Any]] {
         let action = a["action"] as? String ?? ""
         guard ["connect", "disconnect"].contains(action) else { throw ToolError(message: "action must be connect or disconnect") }
         return try text(try await call("POST", "/\(action)"))
+    case "relay":
+        switch a["action"] as? String ?? "get" {
+        case "set": return try text(try await call("PUT", "/relay", json: a.filter { ["enabled", "host", "port", "name", "token"].contains($0.key) }))
+        case "discover": return try text(try await call("GET", "/relay/discover"))
+        case "command": return try text(try await call("POST", "/relay/command", json: ["command": a["command"] as? String ?? ""]))
+        default: return try text(try await call("GET", "/relay"))
+        }
     default: throw ToolError(message: "unknown tool \(name)")
     }
 }

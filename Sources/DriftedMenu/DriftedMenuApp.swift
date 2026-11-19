@@ -70,9 +70,16 @@ struct StatusMenu: View {
 
     var body: some View {
         Text(connectionLine)
+        if table.viaRelay { Text(relayLine) }
         if host.notFoundHint {
-            Text("No table found yet. Is it switched on, and is the HoMedics app closed on your phone?")
-            Text("Wi-Fi models (11\" and newer) aren't supported.")
+            if table.viaRelay {
+                Text(table.relayConnected
+                     ? "The relay hasn't reached the table yet. Is the table on, the relay near it, and the HoMedics app closed?"
+                     : "Can't reach the relay. Is it powered and on Wi-Fi (its light isn't red or purple)? See relay/README.md.")
+            } else {
+                Text("No table found yet. Is it switched on, and is the HoMedics app closed on your phone?")
+                Text("Wi-Fi models (11\" and newer) aren't supported.")
+            }
         }
         if let s = table.tableState {
             Text(s.status == 1 ? "Drawing \(s.patternId) · \(Int(s.progress * 100))%" : "Idle")
@@ -108,13 +115,22 @@ struct StatusMenu: View {
 
     var connectionLine: String {
         switch table.status {
-        case .ready: return "Connected to \(table.connectedName ?? "table")"
+        case .ready: return "Connected to \(table.connectedName ?? "table")" + (table.viaRelay ? " through the relay" : "")
+        case .connecting where table.viaRelay: return table.relayConnected ? "Relay is looking for the table…" : "Connecting to the relay…"
         case .disconnected(let why): return "Disconnected" + (why.map { ": \($0)" } ?? "")
         case .starting: return "Starting… (allow Bluetooth if macOS asks)"
         case .bluetoothOff: return "Bluetooth is off, or Drifted isn't allowed to use it (System Settings → Privacy & Security → Bluetooth)"
         case .scanning: return "Looking for your table…"
         default: return "\(table.status)".capitalized
         }
+    }
+
+    var relayLine: String {
+        guard table.relayConnected else { return "Relay: not connected" }
+        var parts = ["Relay \(table.relayStatus?.link ?? "connected")"]
+        if let r = table.relayStatus?.rssi { parts.append("table signal \(r) dBm") }
+        if let w = table.relayStatus?.wifiRssi { parts.append("Wi-Fi \(w) dBm") }
+        return parts.joined(separator: " · ")
     }
 }
 

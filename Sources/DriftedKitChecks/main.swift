@@ -273,5 +273,51 @@ check("tablePlaylists") {
            && !Command.isSafePlaylistName(String(repeating: "a", count: 19)) && !Command.isSafePlaylistName(""))
 }
 
+check("relayFraming") {
+    // type:u8, length:u16 little-endian, payload (relay/README.md, "Relay protocol").
+    let write = RelayFrame(.tableWrite, Command.confirmData.encoded())
+    expect(write.encoded() == [0x11, 0x04, 0x00, 0x7B, 0x04, 0xD0, 0x4F])
+    expect(RelayFrame.hello(token: "0123456789abcdef").encoded() == [0x01, 0x11, 0x00, 0x00] + Array("0123456789abcdef".utf8))
+    expect(RelayFrame.hello(token: "0123456789abcdef", observe: true).encoded()[3] == 1)
+    expect(RelayFrame.command("select aa:bb:cc:dd:ee:ff").encoded().prefix(3) == [0x30, 24, 0])
+    let big = RelayFrame(.tableData, Array(repeating: 0xAB, count: 300))
+    expect(big.encoded().prefix(3) == [0x10, 0x2C, 0x01], "length is little-endian")
+
+    // Frames split anywhere and joined together come back whole and in order.
+    let stream = write.encoded() + big.encoded() + RelayFrame(.status, Array(#"{"link":"linked"}"#.utf8)).encoded()
+    for cut in [1, 2, 3, 5, 7, 8, 100, stream.count - 1] {
+        var p = RelayFrameParser()
+        let frames = try p.feed(stream[0..<cut]) + p.feed(stream[cut...])
+        expect(frames == [write, big, RelayFrame(.status, Array(#"{"link":"linked"}"#.utf8))], "cut at \(cut)")
+    }
+    var bytewise = RelayFrameParser(), got: [RelayFrame] = []
+    for b in stream { got += try bytewise.feed([b]) }
+    expect(got.count == 3 && got[1].payload.count == 300)
+    // An empty payload is a valid frame.
+    var p = RelayFrameParser()
+    try expect(try p.feed([0x30, 0, 0]) == [RelayFrame(.command)])
+    // A length over the limit means the stream is out of step: the connection is dropped, not resynced.
+    var oversize = RelayFrameParser()
+    expect((try? oversize.feed([0x10, 0x01, 0x10])) == nil, "4097-byte frame rejected")
+    // Unknown types parse (and are ignored by the link), so the relay can add messages.
+    var unknown = RelayFrameParser()
+    try expect(try unknown.feed([0x7E, 1, 0, 9]).first?.kind == nil)
+}
+
+check("relayStatusAndScanIds") {
+    let json = #"{"link":"linked","released":false,"table":{"name":"KS2106100812","address":"aa:bb:cc:dd:ee:ff","addrType":0},"rssi":-61,"wifiRssi":-48,"firmware":"0.1.0","gate":"open"}"#
+    let frame = RelayFrame(.status, Array(json.utf8))
+    let s = RelayStatus(json: frame.json!)
+    expect(s?.linked == true && s?.rssi == -61 && s?.wifiRssi == -48 && s?.table?.name == "KS2106100812" && s?.gate == "open")
+    expect(RelayStatus(json: ["link": "scanning", "table": NSNull(), "rssi": NSNull()])?.linked == false)
+    expect(RelayStatus(json: ["rssi": -50]) == nil, "link is required")
+    // Tables behind a relay get a stand-in id that maps back to the address (Choose table).
+    let t = RelayTable(name: "KS2106100812", address: "AA:BB:CC:DD:EE:0F", addrType: 1, rssi: -70)
+    expect(RelayTable.address(fromId: t.id) == "aa:bb:cc:dd:ee:0f")
+    expect(t.id.uuidString.hasPrefix("D21F7000-0000-0000-0001-"))
+    expect(RelayTable.address(fromId: UUID()) == nil, "a CoreBluetooth id isn't a relay table")
+    expect(RelayEndpoint(token: "x").description.contains("first relay") && RelayEndpoint(host: "10.0.0.5", token: "x").description == "10.0.0.5:8766")
+}
+
 print(failures == 0 ? "All checks passed" : "\(failures) check(s) failed")
 exit(failures == 0 ? 0 : 1)

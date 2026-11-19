@@ -56,6 +56,7 @@ extension Daemon {
     }
 
     private func route(_ req: HTTPRequest) async throws -> HTTPResponse {
+        if let r = try await relayRoute(req) { return r }   // /relay…, Relay.swift
         let parts = req.path.split(separator: "/").map(String.init)
         // Routes with an id segment (array patterns can't bind).
         if parts.count == 2, let id = Int(parts[1]) {
