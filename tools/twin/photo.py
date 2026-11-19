@@ -11,7 +11,9 @@ from sand import _blur
 
 
 def find_rim(img):
-    """Fit an ellipse to the lit rim. Returns (centre, 2x2 matrix mapping the unit circle onto the rim)."""
+    """Fit an ellipse to the lit rim. Returns (centre, 2x2 matrix mapping the unit circle onto the rim).
+    In a dark room the lit rim is the brightest thing in view. In daylight it isn't (the bright region runs off
+    the frame), so then the edge of the textured sand disc is used instead."""
     g = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY) if img.ndim == 3 else img
     mask = (cv2.GaussianBlur(g, (9, 9), 0) > 70).astype(np.uint8)
     cs, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_NONE)
@@ -19,10 +21,43 @@ def find_rim(img):
     H, W = g.shape
     keep = (c[:, 0] > 3) & (c[:, 0] < W - 4) & (c[:, 1] > 3) & (c[:, 1] < H - 4)
     clipped = 1 - keep.mean()
-    (cx, cy), (w, h), ang = cv2.fitEllipse(c[keep].astype(np.float32))
+    if clipped > 0.1:
+        (cx, cy), (w, h), ang = _sand_edge(g)
+    else:
+        (cx, cy), (w, h), ang = cv2.fitEllipse(c[keep].astype(np.float32))
     a = math.radians(ang)
     rot = np.array([[math.cos(a), -math.sin(a)], [math.sin(a), math.cos(a)]])
     return np.array([cx, cy]), rot @ np.diag([w / 2, h / 2]), clipped
+
+
+def _sand_edge(g):
+    """Ellipse round the textured sand disc: along rays from the centre, where the grooves give way to the smooth
+    frosted ring for good. Outliers (glare, the ball, gaps in the drawing) are trimmed and the fit repeated."""
+    g = g.astype(np.float32)
+    tex = cv2.GaussianBlur(np.abs(g - cv2.GaussianBlur(g, (0, 0), 4)), (0, 0), 4)
+    H, W = g.shape
+    cx, cy = W / 2, H / 2
+    rr = np.arange(int(0.15 * H), int(0.55 * H))
+    for _ in range(2):                                # the second pass casts rays from the first fit's centre
+        pts = []
+        for a in np.radians(np.arange(0, 360, 1.0)):
+            x = (cx + rr * math.cos(a)).round().astype(int)
+            y = (cy + rr * math.sin(a)).round().astype(int)
+            ok = (x >= 0) & (x < W) & (y >= 0) & (y < H)
+            prof = np.where(ok, tex[y.clip(0, H - 1), x.clip(0, W - 1)], 0)
+            low = prof < 0.25 * np.median(prof[:len(prof) // 3])
+            run = np.convolve(low.astype(int), np.ones(25, int), 'valid') == 25
+            if run.any() and ok[np.argmax(run)]:
+                pts.append((x[np.argmax(run)], y[np.argmax(run)]))
+        pts = np.float32(pts)
+        keep = np.ones(len(pts), bool)
+        for _ in range(5):
+            (cx, cy), (w, h), ang = cv2.fitEllipse(pts[keep])
+            th = np.arctan2(pts[:, 1] - cy, pts[:, 0] - cx) - math.radians(ang)
+            r_fit = 1 / np.sqrt((np.cos(th) / (w / 2)) ** 2 + (np.sin(th) / (h / 2)) ** 2)
+            err = np.abs(np.hypot(pts[:, 0] - cx, pts[:, 1] - cy) - r_fit)
+            keep = err < max(3.0, 2.5 * np.median(err))
+    return (cx, cy), (w, h), ang
 
 
 def rectify(img, centre, M, X, Y, scale=0.965, turn=0.0, mirror=False):
@@ -49,37 +84,64 @@ def edges(a):
     return e - _blur(e, 10)
 
 
+def grooves(a):
+    """Groove-band energy, locally normalised: where the grooves are, whatever the shading convention, and
+    without a sunlit patch (or the twin's strongest lines) outweighing the rest of the table."""
+    e = np.abs(bandpass(a))
+    return _blur(e / np.sqrt(_blur(e * e, 8) + 1e-3 * (e * e).mean()), 2)
+
+
+def _deglare(img):
+    """Grey photo with saturated glare spots on the glass filled in, lightly blurred against aliasing."""
+    g = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY) if img.ndim == 3 else img
+    mask = cv2.dilate((g >= 245).astype(np.uint8), np.ones((15, 15), np.uint8))
+    g = cv2.inpaint(g.astype(np.uint8), mask, 5, cv2.INPAINT_TELEA) if mask.any() else g
+    return cv2.GaussianBlur(g.astype(np.float32), (0, 0), 1.5)
+
+
 def _corr(a, b, m):
     a, b = a[m] - a[m].mean(), b[m] - b[m].mean()
     return float((a * b).sum() / math.sqrt((a * a).sum() * (b * b).sum() + 1e-12))
 
 
 def register(img, sim, centre, M, scales=None, mirrors=(False, True)):
-    """Line the photo up with the twin. A coarse search over rotation, scale and handedness on blurred edge
+    """Line the photo up with the twin. A coarse search over rotation, scale and handedness on groove-energy
     maps, then an ECC homography that soaks up camera tilt and the rim-vs-sand parallax.
-    scale is the ball's reach (table radius 1) as a fraction of the lit rim's radius."""
+    scale is the ball's reach (table radius 1) as a fraction of the lit rim's radius.
+    (Blurred edge maps worked under the ring light in a dark room, but not in daylight: a sunlit patch and
+    glare on the glass outweighed the grooves.)
+    A symmetric drawing (a six-fold snowflake) matches nearly as well turned by a multiple of 60 degrees, so the
+    best few distinct turns are each warped, and the best final match wins."""
     from sand import Sand, Params
     lo = Sand(Params(n=200, extent=sim.p.extent, rim=sim.p.rim))
-    ref_full = edges(sim.render())
-    ref = _blur(cv2.resize(ref_full, (200, 200), interpolation=cv2.INTER_AREA), 3)
+    cav = sim.features(shadows=())['cavity']
+    ref = grooves(cv2.resize(cav, (200, 200), interpolation=cv2.INTER_AREA))
+    g = _deglare(img)
     m = lo.R < 0.9
-    best = None
+    tried = []
     for mir in mirrors:
         for sc in (scales or np.arange(0.74, 1.0, 0.02)):
             for tn in range(0, 360, 3):
-                ph = _blur(edges(rectify(img, centre, M, lo.X, lo.Y, sc, tn, mir)), 3)
-                c = _corr(ph, ref, m)
-                if best is None or c > best[0]:
-                    best = (c, sc, tn, mir)
-    c0, sc, tn, mir = best
-    top = rectify(img, centre, M, sim.X, sim.Y, sc, tn, mir)
+                ph = grooves(rectify(g, centre, M, lo.X, lo.Y, sc, tn, mir))
+                tried.append((_corr(ph, ref, m), sc, tn, mir))
+    cands = []
+    for t in sorted(tried, key=lambda t: -t[0]):
+        if all(t[3] != o[3] or min(abs(t[2] - o[2]), 360 - abs(t[2] - o[2])) > 20 for o in cands):
+            cands.append(t)
+        if len(cands) == 8:
+            break
     sig = bandpass(sim.features(shadows=())['cavity'])
-    warp = None
-    for patch, search, order in ((96, 28, 1), (64, 14, 2), (48, 8, 3), (40, 5, 3)):
-        warp = fit_warp(top, sig, sim.R, warp, patch, search, order)
-    c = _corr(bandpass(apply_warp(top, warp)), sig, sim.R < 0.9)
-    return {'corr': c, 'coarse_corr': c0, 'scale': float(sc), 'turn': float(tn), 'mirror': bool(mir), 'warp': warp,
-            'centre': centre.tolist(), 'M': M.tolist()}
+    best = None
+    for c0, sc, tn, mir in cands:
+        top = rectify(img, centre, M, sim.X, sim.Y, sc, tn, mir)
+        warp = None
+        for patch, search, order in ((96, 28, 1), (64, 14, 2), (48, 8, 3), (40, 5, 3)):
+            warp = fit_warp(top, sig, sim.R, warp, patch, search, order)
+        c = _corr(bandpass(apply_warp(top, warp)), sig, sim.R < 0.9)
+        if best is None or c > best['corr']:
+            best = {'corr': c, 'coarse_corr': c0, 'scale': float(sc), 'turn': float(tn), 'mirror': bool(mir),
+                    'warp': warp, 'centre': centre.tolist(), 'M': M.tolist()}
+    return best
 
 
 def _poly_terms(x, y, order):
