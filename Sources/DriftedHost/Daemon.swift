@@ -23,7 +23,7 @@ public final class Daemon {
         var result: [String: String]?
     }
 
-    public let table = DriftTable()
+    public let table: DriftTable
     public let config: Config
     public let token: String
     var slots: SlotStore
@@ -52,6 +52,7 @@ public final class Daemon {
     public init(config: Config) throws {
         self.config = config
         try FileManager.default.createDirectory(at: config.stateDir, withIntermediateDirectories: true)
+        table = DriftTable(relay: RelaySettings.load(config.stateDir).endpoint)   // Bluetooth unless relay.json says otherwise
         token = try Self.loadToken(config.stateDir.appendingPathComponent("token"))
         slots = SlotStore(file: config.stateDir.appendingPathComponent("slots.json"))
         switches = Switches.load(config.stateDir.appendingPathComponent("switches.json"))
@@ -148,6 +149,7 @@ public final class Daemon {
     }
 
     private func connectOnce() async {
+        if table.viaRelay { return await connectViaRelay() }   // Relay.swift
         var target = config.device ?? savedDevice()
         if target == nil {
             table.startScan()
@@ -493,6 +495,7 @@ public final class Daemon {
             "alarms": reportedAlarms.sorted().map { ["code": Int($0), "name": TableAlarm.codeNames[$0] ?? "?"] },
         ]
         if let s = table.tableState { out["state"] = stateJSON(s) }
+        out["link"] = linkJSON()   // Relay.swift
         return out
     }
 

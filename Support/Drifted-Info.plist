@@ -24,5 +24,11 @@
     <true/>
     <key>NSBluetoothAlwaysUsageDescription</key>
     <string>Drifted keeps the Bluetooth connection to your HoMedics Drift sand table so apps and AI assistants can draw on it.</string>
+    <key>NSLocalNetworkUsageDescription</key>
+    <string>Drifted can reach your sand table through a Drifted relay on your network, and serves its API to other computers on it.</string>
+    <key>NSBonjourServices</key>
+    <array>
+        <string>_drifted-relay._tcp</string>
+    </array>
 </dict>
 </plist>

@@ -577,6 +577,54 @@
         "type": "object"
       },
       "name": "connection"
+    },
+    {
+      "description": "A Drifted relay (relay/README.md) is a small Wi-Fi board next to the table that holds its Bluetooth link, for a table out of this Mac's Bluetooth range. get (default): the relay setting and the relay's status (link, its signal to the table, Wi-Fi signal). set: save host/port (or Bonjour name) and token, and enabled=true to reach the table through it (false: this Mac's Bluetooth); the link restarts. discover: relays on the network. command: send the relay scan, select ADDRESS|NAME (which table it uses), forget, hold on|off, status, reboot or ota URL.",
+      "inputSchema": {
+        "properties": {
+          "action": {
+            "enum": [
+              "get",
+              "set",
+              "discover",
+              "command"
+            ],
+            "type": "string"
+          },
+          "command": {
+            "description": "For action=command",
+            "type": "string"
+          },
+          "enabled": {
+            "type": "boolean"
+          },
+          "host": {
+            "description": "Relay IP address or host name; null to find it by Bonjour",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "name": {
+            "description": "Bonjour name, e.g. drifted-relay-1a2b3c (see discover)",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "port": {
+            "description": "Default 8766",
+            "type": "integer"
+          },
+          "token": {
+            "description": "The relay's token (relay/setup.py printed it)",
+            "type": "string"
+          }
+        },
+        "required": [],
+        "type": "object"
+      },
+      "name": "relay"
     }
   ]
 }

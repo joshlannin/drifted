@@ -18,7 +18,9 @@ final class ChooseTableModel: NSObject, ObservableObject, NSWindowDelegate {
         self.host = host
         table = daemon.table
         deviceFile = daemon.config.stateDir.appendingPathComponent("device")
-        current = (try? String(contentsOf: deviceFile)).flatMap { UUID(uuidString: $0.trimmingCharacters(in: .whitespacesAndNewlines)) }
+        current = daemon.table.viaRelay
+            ? daemon.table.relayTableId
+            : (try? String(contentsOf: deviceFile)).flatMap { UUID(uuidString: $0.trimmingCharacters(in: .whitespacesAndNewlines)) }
     }
 
     func start() {
@@ -32,7 +34,8 @@ final class ChooseTableModel: NSObject, ObservableObject, NSWindowDelegate {
 
     func choose(_ id: UUID) {
         chosen = true
-        try? id.uuidString.write(to: deviceFile, atomically: true, encoding: .utf8)
+        // Through a relay, the relay scans and remembers the table; otherwise the host reads the saved device.
+        if table.viaRelay { table.selectRelayTable(id) } else { try? id.uuidString.write(to: deviceFile, atomically: true, encoding: .utf8) }
         table.stopScan()
         host.setConnected(true)
         ChooseTable.window?.close()
@@ -54,7 +57,9 @@ struct ChooseTableView: View {
         VStack(alignment: .leading, spacing: 12) {
             Text("Tables nearby")
                 .font(.headline)
-            Text("Drifted has let go of its table while it looks. Close the HoMedics app on your phone and make sure the table is on. Wi-Fi models (11\") don't appear: they aren't supported.")
+            Text((table.viaRelay ? "These are the tables your relay can see. It has let go of its table while it looks. "
+                                 : "Drifted has let go of its table while it looks. ")
+                 + "Close the HoMedics app on your phone and make sure the table is on. Wi-Fi models (11\") don't appear: they aren't supported.")
                 .font(.callout)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)

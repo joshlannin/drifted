@@ -43,5 +43,11 @@
     </array>
     <key>NSBluetoothAlwaysUsageDescription</key>
     <string>Drifted connects to your HoMedics Drift sand table over Bluetooth to send patterns.</string>
+    <key>NSLocalNetworkUsageDescription</key>
+    <string>Drifted can reach your sand table through a Drifted relay on your network.</string>
+    <key>NSBonjourServices</key>
+    <array>
+        <string>_drifted-relay._tcp</string>
+    </array>
 </dict>
 </plist>

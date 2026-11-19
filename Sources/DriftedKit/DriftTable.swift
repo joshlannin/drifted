@@ -74,7 +74,14 @@ public final class DriftTable: NSObject, ObservableObject {
     /// Log raw packets in both directions.
     public var logPackets = true
 
-    private var central: CBCentralManager!
+    /// Created on first Bluetooth use, so a host that only talks through a relay never touches Bluetooth.
+    private var central: CBCentralManager?
+    var bluetooth: CBCentralManager {
+        if let central { return central }
+        let c = CBCentralManager(delegate: self, queue: .main)
+        central = c
+        return c
+    }
     private var peripherals: [UUID: CBPeripheral] = [:]
     private var peripheral: CBPeripheral?
     private var writeChar: CBCharacteristic?
@@ -90,10 +97,27 @@ public final class DriftTable: NSObject, ObservableObject {
     private var waiters: [Int: (match: (TableMessage) -> Any?, cont: CheckedContinuation<Any, Error>)] = [:]
     private var nextWaiterId = 0
 
-    public override init() {
+    public override convenience init() { self.init(relay: nil) }
+
+    /// With `relay`, the table is reached through a Drifted relay over the network instead of Bluetooth.
+    public init(relay: RelayEndpoint?) {
         super.init()
-        central = CBCentralManager(delegate: self, queue: .main)
+        if let relay { relayEndpoint = relay } else { _ = bluetooth }
     }
+
+    // MARK: Relay state (the rest is in DriftTable+Relay.swift)
+
+    /// Set when the table is reached through a relay rather than this Mac's Bluetooth.
+    public internal(set) var relayEndpoint: RelayEndpoint?
+    public var viaRelay: Bool { relayEndpoint != nil }
+    /// The relay's latest status (link state, its signal to the table, Wi-Fi signal, firmware).
+    @Published public internal(set) var relayStatus: RelayStatus?
+    public internal(set) var relayStatusJSON: [String: Any]?
+    var relay: RelayLink?
+    var relayScanTimer: Timer?
+    /// Command lines to send once the relay accepts the connection.
+    var relayPending: [String] = []
+    var relayResultWaiters: [(command: String, cont: CheckedContinuation<[String: Any], Never>)] = []
 
     // MARK: Logging
 
@@ -106,7 +130,8 @@ public final class DriftTable: NSObject, ObservableObject {
     // MARK: Scanning / connection
 
     public func waitForPoweredOn() async throws {
-        switch central.state {
+        if viaRelay { return }
+        switch bluetooth.state {
         case .poweredOn: return
         case .unauthorized: throw DriftError.bluetoothUnavailable("permission denied")
         case .unsupported: throw DriftError.bluetoothUnavailable("unsupported")
@@ -115,35 +140,38 @@ public final class DriftTable: NSObject, ObservableObject {
     }
 
     public func startScan() {
-        guard central.state == .poweredOn else { return }
+        if viaRelay { return relayStartScan() }
+        guard bluetooth.state == .poweredOn else { return }
         discovered = []
         status = .scanning
-        central.scanForPeripherals(withServices: nil, options: [CBCentralManagerScanOptionAllowDuplicatesKey: false])
+        bluetooth.scanForPeripherals(withServices: nil, options: [CBCentralManagerScanOptionAllowDuplicatesKey: false])
         note("Scanning…")
     }
 
     public func stopScan() {
-        central.stopScan()
+        if viaRelay { relayStopScan() } else { central?.stopScan() }
         if status == .scanning { status = .idle }
     }
 
     public func connect(_ id: UUID) {
-        guard let p = peripherals[id] ?? central.retrievePeripherals(withIdentifiers: [id]).first else {
+        if viaRelay { return connectRelay(table: id) }
+        guard let p = peripherals[id] ?? bluetooth.retrievePeripherals(withIdentifiers: [id]).first else {
             note("Unknown device \(id)")
             return
         }
-        central.stopScan()
+        bluetooth.stopScan()
         peripheral = p
         peripherals[id] = p
         p.delegate = self
         status = .connecting
         connectedName = p.name?.trimmingCharacters(in: .whitespacesAndNewlines)
         note("Connecting to \(connectedName ?? id.uuidString)…")
-        central.connect(p)
+        bluetooth.connect(p)
     }
 
     public func disconnect() {
-        if let p = peripheral { central.cancelPeripheralConnection(p) }
+        if viaRelay { return relayRelease() }
+        if let p = peripheral { central?.cancelPeripheralConnection(p) }
     }
 
     /// Gives up on a connection attempt that never got to ready. CoreBluetooth never times out a pending
@@ -153,7 +181,7 @@ public final class DriftTable: NSObject, ObservableObject {
         guard status != .ready else { return }
         if case .disconnected = status { return }
         note("Giving up on this connection attempt: \(reason)")
-        if let p = peripheral { central.cancelPeripheralConnection(p) }
+        if viaRelay { relay?.close(reason) } else if let p = peripheral { central?.cancelPeripheralConnection(p) }
         status = .disconnected(reason)
     }
 
@@ -184,6 +212,7 @@ public final class DriftTable: NSObject, ObservableObject {
     }
 
     private func write(_ packet: Packet) async throws {
+        if viaRelay { return try await relayWrite(packet) }
         guard let p = peripheral, p.state == .connected, let c = writeChar else { throw DriftError.notConnected }
         let bytes = packet.encoded()
         if logPackets { note("> \(bytes.hex)") }
@@ -234,7 +263,7 @@ public final class DriftTable: NSObject, ObservableObject {
         return value as! T
     }
 
-    private func handle(_ packet: Packet) {
+    func handle(_ packet: Packet) {
         if logPackets { note("< \(packet.encoded().hex)") }
         let message = TableMessage(packet)
         messageSeq += 1
@@ -279,6 +308,39 @@ public final class DriftTable: NSObject, ObservableObject {
         } else if let reply = message.reply {
             Task { try? await self.send(reply) }
         }
+    }
+
+    /// The link to the table is gone (Bluetooth disconnect, or the relay lost the table or its connection):
+    /// fail everything waiting on it and start parsing afresh on the next link.
+    func linkDropped(_ reason: String?, quiet: Bool = false) {
+        status = .disconnected(reason)
+        if !quiet { note("Disconnected\(reason.map { ": \($0)" } ?? "")\(rssi.map { " (last signal \($0) dBm)" } ?? "")") }
+        rssi = nil
+        writeChar = nil
+        parser = PacketParser()
+        for (_, w) in waiters { w.cont.resume(throwing: DriftError.notConnected) }
+        waiters = [:]
+        writeResponseWaiters.forEach { $0.resume(throwing: DriftError.notConnected) }
+        writeResponseWaiters = []
+        readyToWriteWaiters.forEach { $0.resume() }
+        readyToWriteWaiters = []
+    }
+
+    /// Bytes the table sent through the relay go into the same parser as Bluetooth notifications.
+    func received(_ bytes: [UInt8]) {
+        for packet in parser.feed(bytes) { handle(packet) }
+    }
+
+    func setStatus(_ s: Status) { status = s }
+    func setConnectedName(_ name: String?) { connectedName = name }
+    func setDiscovered(_ list: [Discovered]) { discovered = list }
+
+    /// Signal strength reported by the relay (its own link to the table).
+    func setRSSI(_ value: Int?) {
+        if let value, value <= -85, rssi.map({ $0 > -85 }) ?? true {
+            note("Weak signal: \(value) dBm. Expect dropped connections; moving the relay or the table closer helps")
+        }
+        rssi = value
     }
 
     // MARK: High level
@@ -469,26 +531,14 @@ extension DriftTable: CBCentralManagerDelegate, CBPeripheralDelegate {
     }
 
     nonisolated public func centralManager(_ central: CBCentralManager, didDisconnectPeripheral peripheral: CBPeripheral, error: Error?) {
-        MainActor.assumeIsolated {
-            status = .disconnected(error?.localizedDescription)
-            note("Disconnected\(error.map { ": \($0.localizedDescription)" } ?? "")\(rssi.map { " (last signal \($0) dBm)" } ?? "")")
-            rssi = nil
-            writeChar = nil
-            parser = PacketParser()
-            for (_, w) in waiters { w.cont.resume(throwing: DriftError.notConnected) }
-            waiters = [:]
-            writeResponseWaiters.forEach { $0.resume(throwing: DriftError.notConnected) }
-            writeResponseWaiters = []
-            readyToWriteWaiters.forEach { $0.resume() }
-            readyToWriteWaiters = []
-        }
+        MainActor.assumeIsolated { linkDropped(error?.localizedDescription) }
     }
 
     nonisolated public func peripheral(_ peripheral: CBPeripheral, didDiscoverServices error: Error?) {
         MainActor.assumeIsolated {
             guard let service = peripheral.services?.first(where: { $0.uuid == Self.serviceUUID }) else {
                 note("Drift service FFE0 not found")
-                central.cancelPeripheralConnection(peripheral)
+                central?.cancelPeripheralConnection(peripheral)
                 return
             }
             peripheral.discoverCharacteristics([Self.writeUUID, Self.notifyUUID], for: service)
