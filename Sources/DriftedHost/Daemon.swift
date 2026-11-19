@@ -38,6 +38,10 @@ public final class Daemon {
     private var lastStateKey = ""
     private var lastProgressEvent = Date.distantPast
     private var bag: Set<AnyCancellable> = []
+    var playlist: Playlist
+    var playlistIdleSince: Date?
+    var playlistLastStart = Date.distantPast
+    var playlistJob: Int?
 
     public init(config: Config) throws {
         self.config = config
@@ -45,6 +49,7 @@ public final class Daemon {
         token = try Self.loadToken(config.stateDir.appendingPathComponent("token"))
         slots = SlotStore(file: config.stateDir.appendingPathComponent("slots.json"))
         switches = Switches.load(config.stateDir.appendingPathComponent("switches.json"))
+        playlist = Playlist.load(config.stateDir.appendingPathComponent("playlist.json"))
         logFile = config.stateDir == Self.defaultStateDir
             ? FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Logs/Drifted/drifted-host.log")
             : config.stateDir.appendingPathComponent("drifted-host.log")
@@ -112,6 +117,12 @@ public final class Daemon {
         table.$tableState.sink { [weak self] s in if let s { self?.stateChanged(s) } }.store(in: &bag)
         table.$lastAlarm.sink { [weak self] a in if let a { self?.alarm(a) } }.store(in: &bag)
         Task { await supervise() }
+        Task { @MainActor in
+            while true {
+                try? await Task.sleep(nanoseconds: 4_000_000_000)
+                self.playlistTick()
+            }
+        }
     }
 
     /// Keeps the connection up unless a client asked us to let go.
@@ -177,6 +188,7 @@ public final class Daemon {
     }
 
     private func stateChanged(_ s: TableState) {
+        playlistObserve(s)
         if s.brightness > 0, switches.lamp, abs(switches.lampLevel - Double(s.brightness) / 100) > 0.005 {
             switches.lampLevel = Double(s.brightness) / 100
             switches.save()
@@ -259,6 +271,7 @@ public final class Daemon {
         let report = PatternValidator.validate(pattern)
         guard report.ok else { throw HTTPError(400, report.issues.filter { $0.severity == .error }.map(\.message).joined(separator: "; ")) }
         let hash = PatternValidator.contentHash(report.pattern)
+        playlistHold("show")
         return enqueue("show") { progress in
             try await self.wakeForDrawing()
             let playing = self.table.tableState.flatMap { $0.status == 1 ? $0.patternId : nil }
@@ -341,7 +354,14 @@ public final class Daemon {
     /// Power: off stops the ball where it is (0x14/16 false, a pause). It stays off until turned on or a
     /// drawing is requested. Saved, so a restart overnight doesn't start drawing again.
     func setPower(_ on: Bool) {
+        let wasOff = !switches.power
         powerSetBySettings(on)
+        // Power on doesn't resume a paused pattern (failure-modes.md); with the playlist on, start the next.
+        if on && wasOff && playlist.active && playlist.pausedBy == nil {
+            _ = command("power", [Command.power(true)])   // jobs run in order, so this goes before the play
+            playlistAdvance("power on")
+            return
+        }
         guard table.status == .ready else { return }   // "off" is sent when the table reconnects (reassertSwitches)
         Task { try? await self.table.send(Command.power(on)) }
     }
@@ -407,7 +427,8 @@ public final class Daemon {
     }
 
     func play(_ id: UInt16) -> Job {
-        enqueue("play") { _ in
+        playlistLastStart = Date()
+        return enqueue("play") { _ in
             try await self.wakeForDrawing()
             try await self.table.play(id)
             return nil
@@ -421,6 +442,7 @@ public final class Daemon {
         guard table.status == .ready else { throw HTTPError(503, "table not connected") }
         let session = LiveSession(table: table)
         session.onEvent = { [weak self] e in self?.emit("live", ["event": "\(e)"]) }
+        playlistHold("live")
         // Live owns the table: wait for queued jobs to drain first.
         await jobChain.value
         try await wakeForDrawing()
@@ -455,6 +477,7 @@ public final class Daemon {
             "power": switches.power,
             "lamp": switches.lamp,
             "rotation": switches.rotation,
+            "playlist": playlistJSON(),
             "storedPatterns": table.storedPatternIds.count,
             "live": live.map { ["running": true, "depth": $0.depth] as [String: Any] } ?? ["running": false],
             "alarms": reportedAlarms.sorted().map { ["code": Int($0), "name": TableAlarm.codeNames[$0] ?? "?"] },
@@ -466,6 +489,7 @@ public final class Daemon {
     func stateJSON(_ s: TableState) -> [String: Any] {
         ["patternId": Int(s.patternId), "drawing": s.status == 1, "progress": s.progress, "brightness": Int(s.brightness),
          "color": s.colorName, "speedRaw": Int(s.speedRaw), "random": s.randomMode, "loop": s.loopMode,
+         "tablePlaylist": s.playlistId,
          "controller": s.controllerVersion ?? NSNull(), "driver": s.driverVersion ?? NSNull()]
     }
 

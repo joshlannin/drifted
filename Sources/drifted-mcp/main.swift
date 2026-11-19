@@ -66,8 +66,11 @@ let tools: [[String: Any]] = [
     ["name": "save_pattern", "description": "Store a drawing permanently under a name (for playlists). Most callers want show_pattern instead.",
      "inputSchema": schema(drawingSchema, required: ["name"])],
     ["name": "delete_pattern", "description": "Delete a saved pattern by id.", "inputSchema": schema(["id": ["type": "integer"]], required: ["id"])],
-    ["name": "playback", "description": "Play a stored pattern id, or pause/next/previous.",
+    ["name": "playback", "description": "Play a stored pattern id, or pause/next/previous. With the playlist on, next plays the playlist's next pattern.",
      "inputSchema": schema(["action": ["type": "string", "enum": ["play", "pause", "next", "previous"]], "id": ["type": "integer", "description": "Pattern id (play only)"]], required: ["action"])],
+    ["name": "playlist", "description": "Drifted's playlist keeps the table going: when a pattern finishes, Drifted starts the next stored one (shuffled unless shuffle=false). ids limits it to those pattern ids; an empty list means every stored pattern. show_pattern and live sessions put it on hold so the drawing stays on the sand; playback next or active=true carries on. Saved across restarts. Call with no arguments to read it.",
+     "inputSchema": schema(["active": ["type": "boolean"], "shuffle": ["type": "boolean"],
+                            "ids": ["type": "array", "items": ["type": "integer"], "description": "Pattern ids to play (see list_patterns); [] for all stored patterns"]])],
     ["name": "settings", "description": "Lights and modes. color '#rrggbb' sets a fixed colour; brightness and speed are 0-1; shifting cycles the palette; random plays random stored patterns when idle; rotation (degrees counter-clockwise, saved) turns every drawing so pictures stand upright for the viewer.",
      "inputSchema": schema(["color": ["type": "string"], "brightness": ["type": "number"], "speed": ["type": "number"], "shifting": ["type": "boolean"],
                             "breathing": ["type": "boolean"], "random": ["type": "boolean"], "loop": ["type": "boolean"],
@@ -134,6 +137,9 @@ func run(_ name: String, _ a: [String: Any]) async throws -> [[String: Any]] {
         }
         guard ["pause", "next", "previous"].contains(action) else { throw ToolError(message: "unknown action \(action)") }
         return try text(try await call("POST", "/\(action)"))
+    case "playlist":
+        if a.isEmpty { return try text(try await call("GET", "/playlist")) }
+        return try text(try await call("PUT", "/playlist", json: a))
     case "settings": return try text(try await call("PUT", "/settings", json: a))
     case "live_start": return try text(try await call("POST", "/live/start"))
     case "live_push": return try text(try await call("POST", "/live/segments", json: drawingBody(a)))

@@ -21,6 +21,8 @@ silently, which is why they're worth knowing before you write a client.
 | Colour comes out yellow instead of white | `0x14/15` sent without its leading `enable` byte. | `14 0f 01 rr gg bb`. |
 | White light reverts to cycling colours on disconnect | `0x14/15` alone is a preview. | Follow it with `0x14/13 "Temp"` and `0x11/4` (shifting off). |
 | A random stock pattern starts between your patterns | Random mode is on. | Turn random and loop off while you drive the table; restore them after. |
+| The table stops after one pattern although random and loop are on: pattern 0, not drawing, the ball parked | Seen after deleting most stored patterns and refilling the table from a host. Not pinned down; the state's playlist field suggests random and loop cycle a playlist the HoMedics app set up, which may be gone. Skip (`0x14/4`) didn't help either; playing an id did. | Start the next pattern from the host when the table goes idle (pattern 0, status ≠ 1). drifted-host's playlist does this. |
+| The lamp stays dark although every lamp command is accepted and the state reports brightness 100 | Unknown. Seen once, after a day of connecting, mass deletes and app sessions. | Check by eye or camera, then power-cycle the table (it comes back in its default colour; set yours again). Sending more lamp commands didn't help. |
 
 ## Safe defaults for a new client
 

@@ -97,7 +97,7 @@ curl -s -H "Authorization: Bearer $(cat ~/Library/Application\ Support/Drifted/t
 ## Drawing on the table
 
 Tools (via MCP): `get_status`, `preview_pattern`, `animate_pattern`, `validate_pattern`, `show_pattern`,
-`settings`, `playback`, `live_start` / `live_push` / `live_stop`, `connection`, and others
+`settings`, `playback`, `playlist`, `live_start` / `live_push` / `live_stop`, `connection`, and others
 ([spec/mcp-tools.json](spec/mcp-tools.json)). Read [docs/drawing-guide.md](docs/drawing-guide.md) first.
 
 **There's a digital twin of the table** ([docs/digital-twin.md](docs/digital-twin.md)). `preview_pattern`

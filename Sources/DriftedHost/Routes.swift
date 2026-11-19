@@ -120,7 +120,16 @@ extension Daemon {
             guard !liveRunning else { throw HTTPError(409, "a live session is running") }
             return try await jobResponse(play(try req.json(Body.self).id), req, wait: true)
         case ("POST", ["pause"]): return try await jobResponse(command("pause", [Command.playPause]), req, wait: true)
-        case ("POST", ["next"]): return try await jobResponse(command("next", [Command.next]), req, wait: true)
+        case ("POST", ["next"]):
+            // With the playlist on, next is its next pattern (and ends a hold); the table's own next only
+            // moves within the HoMedics app's playlist.
+            if playlist.active, let job = playlistAdvance("next") { return try await jobResponse(job, req, wait: true) }
+            return try await jobResponse(command("next", [Command.next]), req, wait: true)
+        case ("GET", ["playlist"]):
+            return .json(playlistJSON())
+        case ("PUT", ["playlist"]):
+            try setPlaylist(try req.json(PlaylistInput.self))
+            return .json(playlistJSON())
         case ("POST", ["previous"]): return try await jobResponse(command("previous", [Command.previous]), req, wait: true)
         case ("PUT", ["settings"]):
             let input = try req.json(SettingsInput.self)

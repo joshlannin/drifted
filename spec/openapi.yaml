@@ -105,7 +105,21 @@ paths:
       requestBody: { content: { application/json: { schema: { type: object, properties: { id: { type: integer } }, required: [id] } } } }
       responses: { "200": { description: Job } }
   /pause: { post: { summary: Toggle play/pause, responses: { "200": { description: Job } } } }
-  /next: { post: { summary: Next pattern, responses: { "200": { description: Job } } } }
+  /next: { post: { summary: "Next pattern. With the playlist on, the playlist's next (ends a hold); otherwise the table's own next", responses: { "200": { description: Job } } } }
+  /playlist:
+    get: { summary: "Drifted's playlist: {active, shuffle, ids, patterns, current, holding?, leftThisRound?}", responses: { "200": { description: Playlist } } }
+    put:
+      summary: "Turn the playlist on or off, or set its ids and order. While on, drifted-host starts the next pattern whenever the table finishes one. /show and live sessions put it on hold (holding) so the drawing stays; /next or active=true carries on. Saved across restarts."
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                active: { type: boolean }
+                shuffle: { type: boolean, description: "Shuffle without repeats until every pattern has played (default true); false plays in id order" }
+                ids: { type: array, items: { type: integer }, description: "Pattern ids to play; [] means every stored pattern except the show slots" }
+      responses: { "200": { description: Playlist } }
   /previous: { post: { summary: Previous pattern, responses: { "200": { description: Job } } } }
   /settings:
     put:

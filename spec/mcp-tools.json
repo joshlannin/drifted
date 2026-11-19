@@ -287,7 +287,7 @@
       "name": "delete_pattern"
     },
     {
-      "description": "Play a stored pattern id, or pause/next/previous.",
+      "description": "Play a stored pattern id, or pause/next/previous. With the playlist on, next plays the playlist's next pattern.",
       "inputSchema": {
         "properties": {
           "action": {
@@ -310,6 +310,29 @@
         "type": "object"
       },
       "name": "playback"
+    },
+    {
+      "description": "Drifted's playlist keeps the table going: when a pattern finishes, Drifted starts the next stored one (shuffled unless shuffle=false). ids limits it to those pattern ids; an empty list means every stored pattern. show_pattern and live sessions put it on hold so the drawing stays on the sand; playback next or active=true carries on. Saved across restarts. Call with no arguments to read it.",
+      "inputSchema": {
+        "properties": {
+          "active": {
+            "type": "boolean"
+          },
+          "ids": {
+            "description": "Pattern ids to play (see list_patterns); [] for all stored patterns",
+            "items": {
+              "type": "integer"
+            },
+            "type": "array"
+          },
+          "shuffle": {
+            "type": "boolean"
+          }
+        },
+        "required": [],
+        "type": "object"
+      },
+      "name": "playlist"
     },
     {
       "description": "Lights and modes. color '#rrggbb' sets a fixed colour; brightness and speed are 0-1; shifting cycles the palette; random plays random stored patterns when idle; rotation (degrees counter-clockwise, saved) turns every drawing so pictures stand upright for the viewer.",
