@@ -40,6 +40,10 @@ other computer┘     local API :8765, token auth
   install Drifted and set up a desktop AI app, but it can never draw on the table itself.
 - **Scripts and other computers** use the HTTP API ([spec/openapi.yaml](spec/openapi.yaml)) with a bearer
   token, from the same Mac or over the local network.
+- **A relay** ([relay/README.md](relay/README.md)) is for a table out of the Mac's Bluetooth range: an ESP32-C6
+  board (M5Stack NanoC6) next to the table holds the Bluetooth link, and Drifted reaches it over the LAN (TCP
+  8766, its own token, found by Bonjour). Only the link changes; everything above it works the same. The relay
+  needs 2.4 GHz Wi-Fi, and setting it up needs it plugged into a computer by USB once.
 
 ## Finding out where things stand
 
@@ -49,6 +53,7 @@ other computer┘     local API :8765, token auth
 | Is Drifted installed? | `/Applications/Drifted.app` exists |
 | Is it running and connected? | A Drifted icon in the menu bar; its menu shows the connection state. Or `GET localhost:8765/status` with the token (below): `"connection": "ready"` means connected |
 | Is your AI connected to it? | You can see the drifted tools (`get_status`, `show_pattern`…) |
+| Does it go through a relay? | `/status` `link.via` is `relay` (then `rssi` is the relay's signal to the table). `GET /relay` (or the `relay` tool) has the relay's own report: `link` (`linked` = it holds the table), `wifiRssi`, firmware. Its LED: blue linked, green Drifted connected, amber looking for the table, red no Wi-Fi, purple not set up |
 | If it won't connect, or keeps dropping | The menu shows a hint after about a minute. Usual causes: the HoMedics app is still connected, the table is off or out of range, or Bluetooth permission wasn't allowed. `/status` gives `rssi` (dBm) while connected: below about -85 the link drops now and then. Drifted reconnects and reruns the job, but moving the Mac closer is the real fix |
 
 ```sh
@@ -69,6 +74,9 @@ curl -s -H "Authorization: Bearer $(cat ~/Library/Application\ Support/Drifted/t
   `scripts/build-host-app.sh && cp -R build/Drifted.app /Applications/`.
 - On first launch macOS asks for **Bluetooth** permission. Only the user can click **Allow**; tell them it's
   coming. Drifted then finds the nearest table and remembers it. **Drifted → Choose table…** switches tables.
+- **A relay**, if the table is too far from the Mac: flash with PlatformIO (`pio run -t upload` in
+  `relay/firmware`), `relay/setup.py` over USB for Wi-Fi and the token, then `PUT /relay` (or the `relay` tool)
+  with its Bonjour name and token. Details and the TCP protocol: [relay/README.md](relay/README.md).
 - **Drifted → Start at login** keeps it running. For a headless, always-on Mac,
   `scripts/install-launchagent.sh` runs `drifted-host` (the same host, without the menu bar) as a login agent.
 

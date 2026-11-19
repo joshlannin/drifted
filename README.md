@@ -90,6 +90,9 @@ open "/Applications/Drifted.app"
 Close the HoMedics app on your phone first. The table accepts one connection at a time. Drifted connects to the
 nearest table and remembers it; use **Choose table…** in its menu to pick a different one.
 
+**Table out of the Mac's Bluetooth range?** A [Drifted relay](relay/README.md), a small Wi-Fi board (M5Stack
+NanoC6, about US$8) plugged in next to the table, holds the Bluetooth link and Drifted reaches it over your network.
+
 ## Windows, Linux, Raspberry Pi, Android
 
 There's no packaged host for these (yet). Two options:
@@ -109,6 +112,7 @@ There's no packaged host for these (yet). Two options:
 | **drifted** | CLI: `drifted status`, `drifted show FILE --clear area`, `drifted preview FILE out.gif` (offline), `drifted weather sunny 72 out.json` (offline), `drifted settings color=#ffffff`, `drifted events` |
 | **DriftedKit** | Swift library for iOS and macOS apps: connection, uploads with recovery, the digital twin (validation, timing, previews, animations), live streaming |
 | **DriftedStudio** | Demo Mac app: draw, preview, send |
+| **relay/** | Firmware and setup scripts for a Wi-Fi relay that holds the table's Bluetooth link, for a table out of the Mac's range |
 | **docs/** | [digital twin](docs/digital-twin.md) · [protocol](docs/protocol.md) · [failure modes](docs/failure-modes.md) · [measured behaviour](docs/behaviour.md) · [drawing guide](docs/drawing-guide.md) · [building clients](docs/building-clients.md) · [daily routine](docs/schedule.md) |
 | **spec/** | HTTP API (OpenAPI), MCP tool list, protocol test data |
 

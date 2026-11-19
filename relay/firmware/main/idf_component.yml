@@ -1,0 +1,4 @@
+dependencies:
+  idf: ">=6.0"
+  espressif/mdns: "^1.15.1"
+  espressif/led_strip: "^3.1.1"
