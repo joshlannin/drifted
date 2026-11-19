@@ -15,3 +15,6 @@ private/
 drifted-host-state/
 # Python
 __pycache__/
+# Signing material (scripts/build-host-app.sh takes the profile from DRIFTED_PROVISIONING_PROFILE)
+*.provisionprofile
+*.mobileprovision

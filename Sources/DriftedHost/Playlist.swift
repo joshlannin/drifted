@@ -64,7 +64,8 @@ extension Daemon {
         } else {
             playlistIdleSince = nil
         }
-        if s.status == 1, s.patternId != 0, playlist.current != s.patternId, playlistPool().contains(s.patternId) {
+        if s.status == 1, s.patternId != 0, playlist.current != s.patternId,
+           playlistPool().contains(s.patternId) || seasonPool().ids.contains(s.patternId) {
             playlist.current = s.patternId
             playlist.save()
         }
@@ -83,27 +84,46 @@ extension Daemon {
         return j.state == .queued || j.state == .running
     }
 
-    /// The ids the playlist draws from, as stored on the table now.
+    /// The ids the playlist draws from, as stored on the table now. "Every stored pattern" leaves out the show
+    /// slots and any id a schedule season lists (those play only in season, mixed in by `playlistNextId`).
     func playlistPool() -> [UInt16] {
         let stored = table.storedPatternIds
-        if playlist.ids.isEmpty { return stored.filter { !SlotStore.ringIds.contains($0) }.sorted() }
+        if playlist.ids.isEmpty {
+            let seasonal = schedule.seasonIds
+            return stored.filter { !SlotStore.ringIds.contains($0) && !seasonal.contains($0) }.sorted()
+        }
         return playlist.ids.filter { stored.contains($0) }
     }
 
     private func playlistNextId() -> UInt16? {
         let pool = playlistPool()
+        // In a season, its patterns take `weight` of the picks: credit builds by weight per pick and each whole
+        // point is spent on a seasonal one (0.5 = every other pattern, 1 = only seasonal).
+        let (seasonal, weight) = seasonPool()
+        if !seasonal.isEmpty, weight > 0 {
+            seasonCredit += weight
+            if seasonCredit >= 1 - 1e-9 || pool.isEmpty {
+                seasonCredit = max(0, seasonCredit - 1)
+                return Self.nextShuffled(seasonal, queue: &seasonQueue, current: playlist.current)
+            }
+        }
         guard !pool.isEmpty else { return nil }
         guard playlist.shuffle else {
             let i = playlist.current.flatMap { pool.firstIndex(of: $0) }.map { ($0 + 1) % pool.count } ?? 0
             return pool[i]
         }
-        playlist.queue.removeAll { !pool.contains($0) }
-        if playlist.queue.isEmpty {
-            playlist.queue = pool.shuffled()
+        return Self.nextShuffled(pool, queue: &playlist.queue, current: playlist.current)
+    }
+
+    /// Shuffle without repeats: plays `queue` from the end, refilling it with the pool when it runs out.
+    private static func nextShuffled(_ pool: [UInt16], queue: inout [UInt16], current: UInt16?) -> UInt16? {
+        queue.removeAll { !pool.contains($0) }
+        if queue.isEmpty {
+            queue = pool.shuffled()
             // Don't repeat the pattern that just finished at the start of a new round.
-            if pool.count > 1, playlist.queue.last == playlist.current { playlist.queue.swapAt(0, playlist.queue.count - 1) }
+            if pool.count > 1, queue.last == current { queue.swapAt(0, queue.count - 1) }
         }
-        return playlist.queue.popLast()
+        return queue.popLast()
     }
 
     /// Starts the next pattern. Returns nil if there's nothing to play.
@@ -119,6 +139,7 @@ extension Daemon {
         playlist.save()
         playlistLastStart = Date()
         log("playlist: \(why); playing \(id)\(slots.name(of: id).map { " (\($0))" } ?? "")")
+        syncSeasonLamp(advance: true)
         let job = play(id)
         playlistJob = job.id
         emit("playlist", playlistJSON())
@@ -159,6 +180,8 @@ extension Daemon {
         if let c = playlist.current { out["current"] = Int(c) }
         if let p = playlist.pausedBy { out["holding"] = p }
         if playlist.shuffle { out["leftThisRound"] = playlist.queue.filter(pool.contains).count }
+        let seasonal = seasonPool().ids
+        if !seasonal.isEmpty { out["seasonPatterns"] = seasonal.count }
         return out
     }
 }

@@ -17,6 +17,11 @@ public struct TableState: Equatable {
     public var driverVersion: String?
     /// Reportedly stays true after `Command.power(false)`, which only pauses (see there). Don't use it as an on/off state.
     public var poweredOn: Bool?
+    /// The lamp colour as `#rrggbb`, and the light mode (0x11/4).
+    public var color: String = ""
+    public var breathing = false
+    public var shifting = false
+    public var shiftSeconds: UInt16 = 0
 }
 
 /// Table → app messages we understand.
@@ -61,18 +66,20 @@ public enum TableMessage: Equatable {
     }
 
     private static func parseState(_ r: inout ByteReader) -> TableState? {
-        guard let brightness = r.u8(), let colorName = r.string(), r.rgb() != nil,
+        guard let brightness = r.u8(), let colorName = r.string(), let rgb = r.rgb(),
               let speed = r.u8(), let playlist = r.string(), let pattern = r.u16(),
               let progress = r.u16() else { return nil }
         let status = r.u8() ?? 0xFF
         let random = r.bool() ?? false, loop = r.bool() ?? false, sleep = r.bool() ?? false
-        _ = r.bool(); _ = r.bool(); _ = r.u16()  // breath, shifting, shift time
+        let breathing = r.bool() ?? false, shifting = r.bool() ?? false, shiftTime = r.u16() ?? 0
         let ctrl = r.string(); _ = r.bool(); _ = r.u8()
         let driver = r.string(); _ = r.bool(); _ = r.u8()
         return TableState(brightness: brightness, colorName: colorName, speedRaw: speed, playlistId: playlist,
                           patternId: pattern, progress: Double(progress) / 10000, status: status,
                           randomMode: random, loopMode: loop, sleepEnabled: sleep,
-                          controllerVersion: ctrl, driverVersion: driver, poweredOn: r.bool())
+                          controllerVersion: ctrl, driverVersion: driver, poweredOn: r.bool(),
+                          color: String(format: "#%02x%02x%02x", rgb.0, rgb.1, rgb.2),
+                          breathing: breathing, shifting: shifting, shiftSeconds: shiftTime)
     }
 
     /// The reply this message expects, if any (docs/protocol.md, Session).

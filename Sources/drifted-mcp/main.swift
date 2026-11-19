@@ -71,6 +71,26 @@ let tools: [[String: Any]] = [
     ["name": "playlist", "description": "Drifted's playlist keeps the table going: when a pattern finishes, Drifted starts the next stored one (shuffled unless shuffle=false). ids limits it to those pattern ids; an empty list means every stored pattern. show_pattern and live sessions put it on hold so the drawing stays on the sand; playback next or active=true carries on. Saved across restarts. Call with no arguments to read it.",
      "inputSchema": schema(["active": ["type": "boolean"], "shuffle": ["type": "boolean"],
                             "ids": ["type": "array", "items": ["type": "integer"], "description": "Pattern ids to play (see list_patterns); [] for all stored patterns"]])],
+    ["name": "schedule", "description": "Drifted's daily routine (docs/schedule.md). At weatherAt (local HH:mm, e.g. 04:15) it fetches today's forecast (WeatherKit, else Open-Meteo) and draws the weather picture: that turns the table on, and the playlist holds so the picture stays. At playlistAt (e.g. 09:00) the playlist carries on. Seasons mix their pattern ids into the playlist and put their colours on the lamp from start to end (the user's own lamp colour comes back after). Turning the table off at night is left to whatever drives the power switch. Call with no arguments to read it and today's status; pass fields to change them (seasons replaces the list); run does a step now (dryRun with weather fetches the forecast and builds the picture without drawing).",
+     "inputSchema": schema([
+        "enabled": ["type": "boolean"],
+        "weatherAt": ["type": ["string", "null"], "description": "Local time HH:mm for the weather picture; null skips it"],
+        "playlistAt": ["type": ["string", "null"], "description": "Local time HH:mm the playlist carries on; null skips it"],
+        "location": ["type": "object", "properties": ["latitude": ["type": "number"], "longitude": ["type": "number"]],
+                     "description": "Where the forecast is for. Fixed coordinates; no Location Services"],
+        "units": ["type": "string", "enum": ["fahrenheit", "celsius"]],
+        "seasons": ["type": "array", "description": "Replaces the list. With the playlist's ids empty, ids a season lists play only in season",
+                    "items": ["type": "object", "required": ["name", "start", "end"], "properties": [
+                        "name": ["type": "string"],
+                        "start": ["type": "string", "description": "MM-DD (every year) or YYYY-MM-DD, inclusive"],
+                        "end": ["type": "string", "description": "Same form as start, inclusive; MM-DD may wrap the new year"],
+                        "ids": ["type": "array", "items": ["type": "integer"], "description": "Stored pattern ids to mix in"],
+                        "weight": ["type": "number", "description": "Share of picks from ids: 0.5 every other pattern (default), 1 only these"],
+                        "colors": ["type": "array", "items": ["type": "string"], "description": "#rrggbb; with several, the lamp moves to the next with each pattern"],
+                    ]]],
+        "run": ["type": "string", "enum": ["weather", "playlist"], "description": "Do this step now"],
+        "dryRun": ["type": "boolean", "description": "With run=weather: fetch and build, don't draw"],
+     ])],
     ["name": "settings", "description": "Lights and modes. color '#rrggbb' sets a fixed colour; brightness and speed are 0-1; shifting cycles the palette; random plays random stored patterns when idle; rotation (degrees counter-clockwise, saved) turns every drawing so pictures stand upright for the viewer.",
      "inputSchema": schema(["color": ["type": "string"], "brightness": ["type": "number"], "speed": ["type": "number"], "shifting": ["type": "boolean"],
                             "breathing": ["type": "boolean"], "random": ["type": "boolean"], "loop": ["type": "boolean"],
@@ -140,6 +160,13 @@ func run(_ name: String, _ a: [String: Any]) async throws -> [[String: Any]] {
     case "playlist":
         if a.isEmpty { return try text(try await call("GET", "/playlist")) }
         return try text(try await call("PUT", "/playlist", json: a))
+    case "schedule":
+        if let step = a["run"] as? String {
+            return try text(try await call("POST", "/schedule/run", json: ["step": step, "dryRun": a["dryRun"] as? Bool ?? false]))
+        }
+        let body = a.filter { ["enabled", "weatherAt", "playlistAt", "location", "units", "seasons"].contains($0.key) }
+        if body.isEmpty { return try text(try await call("GET", "/schedule")) }
+        return try text(try await call("PUT", "/schedule", json: body))
     case "settings": return try text(try await call("PUT", "/settings", json: a))
     case "live_start": return try text(try await call("POST", "/live/start"))
     case "live_push": return try text(try await call("POST", "/live/segments", json: drawingBody(a)))

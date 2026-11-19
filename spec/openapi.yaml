@@ -37,6 +37,26 @@ components:
     Error:
       type: object
       properties: { error: { type: string } }
+    Schedule:
+      type: object
+      properties:
+        enabled: { type: boolean }
+        weatherAt: { type: [string, "null"], description: "Local HH:mm: fetch today's forecast and draw the weather picture (turns the table on; holds the playlist). null skips it" }
+        playlistAt: { type: [string, "null"], description: "Local HH:mm: the playlist carries on. null skips it" }
+        location: { type: object, properties: { latitude: { type: number }, longitude: { type: number } }, description: "Fixed coordinates for the forecast" }
+        units: { type: string, enum: [fahrenheit, celsius] }
+        seasons:
+          type: array
+          items:
+            type: object
+            required: [name, start, end]
+            properties:
+              name: { type: string }
+              start: { type: string, description: "MM-DD (every year) or YYYY-MM-DD; inclusive" }
+              end: { type: string, description: "Same form as start; inclusive. MM-DD may wrap the new year" }
+              ids: { type: array, items: { type: integer }, description: "Stored pattern ids to mix into the playlist. With the playlist's ids empty, they play only in season" }
+              weight: { type: number, minimum: 0, maximum: 1, default: 0.5, description: "Share of playlist picks from ids: 0.5 every other pattern, 1 only these" }
+              colors: { type: array, items: { type: string }, description: "#rrggbb for the lamp; with several, the next with each pattern. The first listed season with colours wins" }
 paths:
   /status:
     get:
@@ -120,6 +140,28 @@ paths:
                 shuffle: { type: boolean, description: "Shuffle without repeats until every pattern has played (default true); false plays in id order" }
                 ids: { type: array, items: { type: integer }, description: "Pattern ids to play; [] means every stored pattern except the show slots" }
       responses: { "200": { description: Playlist } }
+  /schedule:
+    get: { summary: "The daily routine (docs/schedule.md) and today's status: {enabled, weatherAt, playlistAt, location, units, seasons, status}", responses: { "200": { description: Schedule } } }
+    put:
+      summary: "Change the daily routine; fields left out stay as they are. Saved in the state dir (schedule.json). Turning it on, or moving a time, mid-day doesn't run steps whose time has passed"
+      requestBody: { content: { application/json: { schema: { $ref: "#/components/schemas/Schedule" } } } }
+      responses: { "200": { description: Schedule }, "400": { description: Invalid field } }
+  /schedule/run:
+    post:
+      summary: "Run a step now (for testing; the day's scheduled steps still run). weather fetches today's forecast and draws the picture, holding the playlist; dryRun fetches and builds without drawing. playlist ends the hold and starts the next pattern"
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                step: { type: string, enum: [weather, playlist] }
+                dryRun: { type: boolean, description: "weather only" }
+              required: [step]
+      responses:
+        "200": { description: "weather dryRun: {forecast, drawing}; playlist: {result}" }
+        "202": { description: "weather: {forecast: {source, raw, condition, high}, drawing: {name, points, estimatedSeconds}, job}" }
+        "409": { description: No location set, or the scheduled weather is running }
   /previous: { post: { summary: Previous pattern, responses: { "200": { description: Job } } } }
   /settings:
     put:

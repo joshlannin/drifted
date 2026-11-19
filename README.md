@@ -106,10 +106,10 @@ There's no packaged host for these (yet). Two options:
 | **Drifted** (`Sources/DriftedMenu`) | Menu-bar app: holds the Bluetooth connection, serves the local API, connects AI clients |
 | **drifted-host** | The same host without a menu bar, for headless use (`scripts/install-launchagent.sh`) |
 | **drifted-mcp** | MCP server for Claude Desktop, Claude Code, Codex and other MCP clients |
-| **drifted** | CLI: `drifted status`, `drifted show FILE --clear area`, `drifted preview FILE out.gif` (offline), `drifted settings color=#ffffff`, `drifted events` |
+| **drifted** | CLI: `drifted status`, `drifted show FILE --clear area`, `drifted preview FILE out.gif` (offline), `drifted weather sunny 72 out.json` (offline), `drifted settings color=#ffffff`, `drifted events` |
 | **DriftedKit** | Swift library for iOS and macOS apps: connection, uploads with recovery, the digital twin (validation, timing, previews, animations), live streaming |
 | **DriftedStudio** | Demo Mac app: draw, preview, send |
-| **docs/** | [digital twin](docs/digital-twin.md) · [protocol](docs/protocol.md) · [failure modes](docs/failure-modes.md) · [measured behaviour](docs/behaviour.md) · [drawing guide](docs/drawing-guide.md) · [building clients](docs/building-clients.md) |
+| **docs/** | [digital twin](docs/digital-twin.md) · [protocol](docs/protocol.md) · [failure modes](docs/failure-modes.md) · [measured behaviour](docs/behaviour.md) · [drawing guide](docs/drawing-guide.md) · [building clients](docs/building-clients.md) · [daily routine](docs/schedule.md) |
 | **spec/** | HTTP API (OpenAPI), MCP tool list, protocol test data |
 
 ## Contributing

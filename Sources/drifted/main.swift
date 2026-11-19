@@ -14,6 +14,10 @@ drifted — talk to a HoMedics Drift sand table
   drifted raw CMD [BYTES…] [--ack] [--device UUID]
                                             send a framed packet, e.g. `drifted raw 14 03` (play/pause)
   drifted generate spiral|rose|spirograph OUT.txt   write a generated pattern (offline)
+  drifted weather CONDITION TEMPERATURE OUT.json|OUT.txt [--update]
+                                            the daily weather picture (offline; designs/weather.py ported).
+                                            CONDITION: sunny partlycloudy cloudy fog rain heavy_rain
+                                            thunderstorm sleet hail snow clear_night. --update: digits only
   drifted live [--segments N] [--points N] [--interrupt-at K]
                                             stream a generated drawing through LiveSession (soak test)
   drifted session [--device UUID] < SCRIPT    run a timed script over one connection, logging state changes.
@@ -425,6 +429,31 @@ func run() async throws {
         }
         try pattern.driftText.write(toFile: args[1], atomically: true, encoding: .utf8)
         print("Wrote \(pattern.points.count) points to \(args[1])")
+
+    case "weather":
+        let update = flag("--update")
+        let need = update ? 2 : 3
+        guard args.count >= need, let temp = Int(args[need - 2]) else { fail("weather needs CONDITION TEMPERATURE OUT (or --update TEMPERATURE OUT)") }
+        let out = args[need - 1]
+        let xy: [(x: Double, y: Double)]
+        let name: String
+        if update {
+            xy = WeatherPicture.temperaturePath(temp); name = "weather-temp-\(temp)"
+        } else {
+            guard let c = WeatherPicture.Condition(rawValue: args[0]) else {
+                fail("unknown condition \(args[0]): \(WeatherPicture.Condition.allCases.map(\.rawValue).joined(separator: ", "))")
+            }
+            xy = WeatherPicture.path(c, temperature: temp); name = "weather-\(c.rawValue)-\(temp)"
+        }
+        let pattern = SandPattern.fromStrokes([xy], name: name)
+        if out.hasSuffix(".json") {
+            let body: [String: Any] = ["name": name, "xy": xy.map { [$0.x, $0.y] }]
+            try JSONSerialization.data(withJSONObject: body).write(to: URL(fileURLWithPath: out))
+        } else {
+            try pattern.driftText.write(toFile: out, atomically: true, encoding: .utf8)
+        }
+        let secs = Int(TableTwin.simulate(PatternValidator.validate(pattern).pattern).drawSeconds)
+        print("\(out): \(xy.count) points, \(String(format: "%.1f", pattern.length)) radii, draws in about \(secs / 60) min \(secs % 60) s")
 
     default:
         print(usage)

@@ -28,6 +28,6 @@ let package = Package(
         .executableTarget(name: "drifted-host", dependencies: ["DriftedHost"], linkerSettings: embedInfoPlist),
         .executableTarget(name: "drifted-mcp"),
         .executableTarget(name: "DriftedMenu", dependencies: ["DriftedHost", "DriftedKit"], linkerSettings: embedInfoPlist),
-        .executableTarget(name: "DriftedKitChecks", dependencies: ["DriftedKit"]),
+        .executableTarget(name: "DriftedKitChecks", dependencies: ["DriftedKit", "DriftedHost"]),
     ]
 )

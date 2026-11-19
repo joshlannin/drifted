@@ -42,6 +42,12 @@ public final class Daemon {
     var playlistIdleSince: Date?
     var playlistLastStart = Date.distantPast
     var playlistJob: Int?
+    var schedule: ScheduleConfig
+    var scheduleState: ScheduleState
+    var scheduleWeatherTask: Task<Void, Never>?
+    /// Season mixing: credit toward the next seasonal pick, and the seasonal shuffle order.
+    var seasonCredit = 0.0
+    var seasonQueue: [UInt16] = []
 
     public init(config: Config) throws {
         self.config = config
@@ -50,6 +56,8 @@ public final class Daemon {
         slots = SlotStore(file: config.stateDir.appendingPathComponent("slots.json"))
         switches = Switches.load(config.stateDir.appendingPathComponent("switches.json"))
         playlist = Playlist.load(config.stateDir.appendingPathComponent("playlist.json"))
+        schedule = ScheduleConfig.load(config.stateDir.appendingPathComponent("schedule.json"))
+        scheduleState = ScheduleState.load(config.stateDir.appendingPathComponent("schedule-state.json"))
         logFile = config.stateDir == Self.defaultStateDir
             ? FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Logs/Drifted/drifted-host.log")
             : config.stateDir.appendingPathComponent("drifted-host.log")
@@ -121,6 +129,7 @@ public final class Daemon {
             while true {
                 try? await Task.sleep(nanoseconds: 4_000_000_000)
                 self.playlistTick()
+                self.scheduleTick()
             }
         }
     }
@@ -265,13 +274,13 @@ public final class Daemon {
 
     /// Shows a drawing using the slot ring: reuse a slot that already holds it, else overwrite the least
     /// recently used one that isn't drawing. Clients never pick ids or delete anything.
-    func show(_ drawing: SandPattern) throws -> Job {
+    func show(_ drawing: SandPattern, hold: String = "show") throws -> Job {
         try requireNoLive()
         let pattern = oriented(drawing)
         let report = PatternValidator.validate(pattern)
         guard report.ok else { throw HTTPError(400, report.issues.filter { $0.severity == .error }.map(\.message).joined(separator: "; ")) }
         let hash = PatternValidator.contentHash(report.pattern)
-        playlistHold("show")
+        playlistHold(hold)
         return enqueue("show") { progress in
             try await self.wakeForDrawing()
             let playing = self.table.tableState.flatMap { $0.status == 1 ? $0.patternId : nil }
@@ -478,6 +487,7 @@ public final class Daemon {
             "lamp": switches.lamp,
             "rotation": switches.rotation,
             "playlist": playlistJSON(),
+            "schedule": ["enabled": schedule.enabled, "season": scheduleState.lampSeason ?? NSNull()] as [String: Any],
             "storedPatterns": table.storedPatternIds.count,
             "live": live.map { ["running": true, "depth": $0.depth] as [String: Any] } ?? ["running": false],
             "alarms": reportedAlarms.sorted().map { ["code": Int($0), "name": TableAlarm.codeNames[$0] ?? "?"] },
@@ -488,7 +498,7 @@ public final class Daemon {
 
     func stateJSON(_ s: TableState) -> [String: Any] {
         ["patternId": Int(s.patternId), "drawing": s.status == 1, "progress": s.progress, "brightness": Int(s.brightness),
-         "color": s.colorName, "speedRaw": Int(s.speedRaw), "random": s.randomMode, "loop": s.loopMode,
+         "color": s.colorName, "rgb": s.color, "shifting": s.shifting, "speedRaw": Int(s.speedRaw), "random": s.randomMode, "loop": s.loopMode,
          "tablePlaylist": s.playlistId,
          "controller": s.controllerVersion ?? NSNull(), "driver": s.driverVersion ?? NSNull()]
     }

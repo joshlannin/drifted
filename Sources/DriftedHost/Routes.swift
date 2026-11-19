@@ -130,6 +130,16 @@ extension Daemon {
         case ("PUT", ["playlist"]):
             try setPlaylist(try req.json(PlaylistInput.self))
             return .json(playlistJSON())
+        case ("GET", ["schedule"]):
+            return .json(scheduleJSON())
+        case ("PUT", ["schedule"]):
+            try setSchedule(try req.json(ScheduleInput.self))
+            return .json(scheduleJSON())
+        case ("POST", ["schedule", "run"]):
+            struct Body: Decodable { var step: String; var dryRun: Bool? }
+            let b = try req.json(Body.self)
+            let out = try await scheduleRun(step: b.step, dryRun: b.dryRun ?? false)
+            return .json(out, status: out["job"] != nil ? 202 : 200)
         case ("POST", ["previous"]): return try await jobResponse(command("previous", [Command.previous]), req, wait: true)
         case ("PUT", ["settings"]):
             let input = try req.json(SettingsInput.self)
@@ -140,6 +150,7 @@ extension Daemon {
             }
             let packets = try settingsPackets(input)
             if let b = input.brightness { lampSetBySettings(brightness: b) }
+            scheduleNoteLightSettings(input)
             if let p = input.power { powerSetBySettings(p) }
             return try await jobResponse(command("settings", packets), req, wait: true)
 

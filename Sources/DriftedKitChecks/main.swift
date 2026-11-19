@@ -1,3 +1,4 @@
+import DriftedHost
 import DriftedKit
 import Foundation
 
@@ -73,6 +74,7 @@ check("specVectorsMatchDriftedKit") {
     if case .state(let st)? = decode("running_state") {
         expect(st.patternId == 50000 && st.status == 1 && abs(st.progress - 0.25) < 1e-9 && st.colorName == "Temp")
         expect(st.controllerVersion == "A_11_V0.7.12" && st.driverVersion == "B_11_V0.3.3")
+        expect(st.color == "#ffffff" && !st.shifting && !st.breathing && st.shiftSeconds == 0)
     } else { expect(false, "running_state didn't decode") }
 }
 
@@ -185,6 +187,69 @@ check("weekdayAndMonthEncoding") {
     cal.timeZone = TimeZone(identifier: "UTC")!
     let date = cal.date(from: DateComponents(year: 2026, month: 10, day: 25, hour: 13, minute: 45, second: 30))!
     expect(Array(Command.currentTime(date, calendar: cal).data) == [2, 26, 9, 25, 13, 45, 30, 7])
+}
+
+check("weatherPictureMatchesWeatherPy") {
+    // Fingerprints from `python3 designs/weather.py` (designs/weather.py's densified path: points, length,
+    // last point). The Swift port must keep drawing the same picture.
+    let golden: [(WeatherPicture.Condition, Int, Int, Double, (Double, Double))] = [
+        (.sunny, 72, 12787, 94.25203, (0.302041, 0.57657)),
+        (.partlycloudy, 54, 16074, 108.713627, (0.306441, 0.57657)),
+        (.snow, -12, 15438, 105.765237, (0.382791, 0.50657)),
+        (.thunderstorm, 88, 15197, 100.476844, (0.302041, 0.57657)),
+        (.hail, 147, 15681, 93.396647, (0.407791, 0.48657)),
+    ]
+    for (c, t, n, length, last) in golden {
+        let p = WeatherPicture.path(c, temperature: t)
+        let l = zip(p, p.dropFirst()).reduce(0.0) { $0 + hypot($1.1.x - $1.0.x, $1.1.y - $1.0.y) }
+        expect(p.count == n && abs(l - length) < 1e-5 && abs(p.last!.x - last.0) < 1e-6 && abs(p.last!.y - last.1) < 1e-6,
+               "\(c.rawValue) \(t): \(p.count) points, length \(l)")
+    }
+    expect(WeatherPicture.temperaturePath(72).count == 4442)
+    for c in WeatherPicture.Condition.allCases {
+        let r = PatternValidator.validate(WeatherPicture.pattern(c, temperature: 72))
+        let secs = TableTwin.simulate(r.pattern).drawSeconds
+        expect(r.ok && secs > 600 && secs < 1200, "\(c.rawValue): ok \(r.ok), \(Int(secs)) s")
+    }
+}
+
+check("weatherConditionsFromSources") {
+    expect(WeatherPicture.Condition(weatherKit: "mostlyClear") == .sunny)
+    expect(WeatherPicture.Condition(weatherKit: "partlyCloudy") == .partlycloudy)
+    expect(WeatherPicture.Condition(weatherKit: "heavyRain") == .heavyRain)
+    expect(WeatherPicture.Condition(weatherKit: "scatteredThunderstorms") == .thunderstorm)
+    expect(WeatherPicture.Condition(weatherKit: "wintryMix") == .sleet)
+    expect(WeatherPicture.Condition(weatherKit: "flurries") == .snow)
+    expect(WeatherPicture.Condition(weatherKit: "somethingNew") == .cloudy)
+    expect(WeatherPicture.Condition(wmo: 0) == .sunny && WeatherPicture.Condition(wmo: 2) == .partlycloudy)
+    expect(WeatherPicture.Condition(wmo: 45) == .fog && WeatherPicture.Condition(wmo: 65) == .heavyRain)
+    expect(WeatherPicture.Condition(wmo: 66) == .sleet && WeatherPicture.Condition(wmo: 75) == .snow)
+    expect(WeatherPicture.Condition(wmo: 95) == .thunderstorm && WeatherPicture.Condition(wmo: 3) == .cloudy)
+}
+
+check("scheduleTimingAndSeasons") {
+    let w = ScheduleRules.parseTime("04:15")!, p = ScheduleRules.parseTime("09:00")!
+    expect(w == 255 && p == 540 && ScheduleRules.parseTime("9:00") == 540 && ScheduleRules.parseTime("24:00") == nil
+           && ScheduleRules.parseTime("09:5") == nil)
+    // Weather: on time, or late while 30 min remain before the playlist step.
+    expect(ScheduleRules.weatherCatchUp(minute: w, weatherAt: w, playlistAt: p))
+    expect(ScheduleRules.weatherCatchUp(minute: 7 * 60, weatherAt: w, playlistAt: p))
+    expect(!ScheduleRules.weatherCatchUp(minute: 8 * 60 + 30, weatherAt: w, playlistAt: p))
+    expect(ScheduleRules.weatherCatchUp(minute: 8 * 60 + 29, weatherAt: w, playlistAt: p))
+    expect(!ScheduleRules.weatherCatchUp(minute: 10 * 60, weatherAt: w, playlistAt: nil))
+    // Playlist: up to 3 hours late.
+    expect(ScheduleRules.playlistCatchUp(minute: p + 179, playlistAt: p) && !ScheduleRules.playlistCatchUp(minute: p + 180, playlistAt: p))
+
+    var cal = Calendar(identifier: .gregorian); cal.timeZone = TimeZone(identifier: "America/Denver")!
+    func day(_ y: Int, _ m: Int, _ d: Int, _ h: Int = 12) -> Date { cal.date(from: DateComponents(year: y, month: m, day: d, hour: h))! }
+    func inSeason(_ s: String, _ e: String, _ date: Date) -> Bool { ScheduleRules.season(start: s, end: e, contains: date, calendar: cal) }
+    expect(inSeason("2026-12-04", "2026-12-12", day(2026, 12, 4, 0)) && inSeason("2026-12-04", "2026-12-12", day(2026, 12, 12, 23)))
+    expect(!inSeason("2026-12-04", "2026-12-12", day(2026, 12, 13, 0)) && !inSeason("2026-12-04", "2026-12-12", day(2027, 12, 5)))
+    expect(inSeason("12-01", "12-26", day(2030, 12, 25)) && !inSeason("12-01", "12-26", day(2030, 12, 27)))
+    expect(inSeason("12-20", "01-06", day(2027, 1, 3)) && inSeason("12-20", "01-06", day(2026, 12, 31))
+           && !inSeason("12-20", "01-06", day(2027, 1, 7)))
+    expect(!inSeason("12-01", "2026-12-26", day(2026, 12, 5)), "mixed forms never match")
+    expect(ScheduleRules.parseColor("#FFD27A")! == (255, 210, 122) && ScheduleRules.parseColor("#12345") == nil)
 }
 
 print(failures == 0 ? "All checks passed" : "\(failures) check(s) failed")
