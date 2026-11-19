@@ -15,7 +15,8 @@ import numpy as np
 
 @dataclass
 class Params:
-    # defaults fitted to photos of 7 recorded runs, rain and birthday held out (2026-10-26)
+    # defaults fitted to photos of 7 recorded runs, rain and birthday held out (2026-10-26); backlash and
+    # isotropic added 2026-11-18 (held-out R^2 0.632 -> 0.670)
     n: int = 620                 # grid cells across the table
     extent: float = 1.16         # half-width of the grid in table radii
     rim: float = 1.12            # sand ends here; the ball reaches 1.0, the sand goes a little further
@@ -41,6 +42,13 @@ class Params:
     #                              isn't carried across the ball into an older groove beside it). 0: either side.
     skew: float = 0.0            # where in the deposit band the sand piles highest: 0 the middle, 1 right at
     #                              the groove's edge (a sharp lip that falls away outward)
+    backlash: float = 0.004      # play in the theta drive, radians: when the arm reverses direction the ball
+    #                              stays put until the motor has turned this far, so passes drawn one way sit
+    #                              a little to one side of passes drawn the other way. Back-and-forth fills pair
+    #                              up into wider grooves with a sharp crest between pairs.
+    isotropic: bool = True       # relax along the diagonals too, so the angle of repose is the same in every
+    #                              direction (False: along the grid axes only; diagonals settle up to ~49 deg).
+    #                              Not applied together with firm.
     seed: int = 1
 
     def to_dict(self):
@@ -95,6 +103,8 @@ class Sand:
         if self.ballpos is not None:                  # the ball travels from wherever it stopped
             xy = [self.ballpos] + list(xy)
         pts = _table_path(xy, step)
+        if p.backlash > 0:
+            pts = _backlash(pts, p.backlash)
         if p.lag > 0:
             pts = _trail(pts, p.lag)
         floor = p.depth - p.sink * p.ball            # ball bottom height
@@ -223,6 +233,8 @@ class Sand:
         lim = math.tan(math.radians(p.repose)) * self.dx
         pk = self.packed[i0 - 1:i1 + 1, j0 - 1:j1 + 1] if self.packed is not None else None
         for _ in range(iters):
+            if p.isotropic and pk is None:
+                _relax_diagonals(h, m, lim)
             for axis, sgn in ((0, 1), (1, 1)):
                 d = np.diff(h, axis=axis)                      # h[k+1] - h[k]
                 mm = (m[1:, :] & m[:-1, :]) if axis == 0 else (m[:, 1:] & m[:, :-1])
@@ -254,7 +266,11 @@ class Sand:
             ring += np.clip((nx * lx + ny * ly + nz * lz) / d, 0, None) / d
         ring /= lights
         cavity = self.h - _blur(self.h, max(1, int(round(self.p.ball / self.dx))))
-        f = {'ring': ring, 'nz': nz, 'cavity': cavity / self.p.ball, 'slope': 1 - nz}
+        # curvature (ball radius / bend radius): sharp crests catch the light, narrow groove bottoms stay dark
+        hb = _blur(self.h, 1)
+        curv = (np.roll(hb, 1, 0) + np.roll(hb, -1, 0) + np.roll(hb, 1, 1) + np.roll(hb, -1, 1) - 4 * hb)
+        f = {'ring': ring, 'nz': nz, 'cavity': cavity / self.p.ball, 'slope': 1 - nz,
+             'curv': curv * self.p.ball / self.dx ** 2}
         if shadows:
             for tan_e in shadows:
                 f[f'shadow{tan_e:g}'] = self._shadowed_ring(nx, ny, nz, tan_e)
@@ -309,6 +325,32 @@ def _table_path(xy, step):
             t, r = t0 + (t1 - t0) * i / n, r0 + (r1 - r0) * i / n
             out.append((r * math.cos(t), r * math.sin(t)))
     return out
+
+
+def _backlash(pts, play):
+    """The ball's path when the theta drive has this much play (radians): the ball's theta follows the
+    commanded theta only once the motor has taken up the slack, so after every reversal it lags by up to play.
+    The first point is where the ball is."""
+    out, prev, bt = [], None, None
+    for x, y in pts:
+        r = math.hypot(x, y)
+        t = math.atan2(y, x)
+        if prev is not None:
+            t = prev + (t - prev + math.pi) % (2 * math.pi) - math.pi
+        prev = t
+        bt = t if bt is None else min(t + play, max(t - play, bt))
+        out.append((r * math.cos(bt), r * math.sin(bt)))
+    return out
+
+
+def _relax_diagonals(h, m, lim):
+    """One avalanche pass along both diagonals (in place), at the same angle of repose as along the axes."""
+    lim = lim * math.sqrt(2)
+    for a, b, ma in ((h[:-1, :-1], h[1:, 1:], m[:-1, :-1] & m[1:, 1:]), (h[:-1, 1:], h[1:, :-1], m[:-1, 1:] & m[1:, :-1])):
+        d = b - a
+        excess = np.where(ma, np.sign(d) * np.maximum(np.abs(d) - lim, 0) * 0.125, 0)
+        a += excess
+        b -= excess
 
 
 def _densify(xy, step):

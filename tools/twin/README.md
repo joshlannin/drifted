@@ -51,11 +51,18 @@ What the loop found, now in the defaults (`Params` in `sand.py`):
   groove, mostly on the side it was cut from, and settles at about 39°.
 - The ball follows the commanded path to within about 0.012 radii at 0.10–0.12 radii per second; sand
   rounding at tight turns looks like a lag of about 0.02 radii.
+- The arm's turning drive has a little play, about 0.004 radians (0.003 radii at the middle of the table):
+  rows drawn one way sit slightly to one side of rows drawn back the other way. In a back-and-forth fill
+  0.035 radii apart that pairs the rows up into wider grooves with a sharp crest between each pair, which is
+  what the table shows; without it the model drew even, shallow ripples there.
+- Sharp crests catch the light and narrow groove bottoms stay dark, so the renderer has a curvature term as
+  well as the slope, cavity and shadow terms.
 - Cast shadows from the ring light matter as much as the grooves themselves.
 - The look (lighting mix and the table's colour, in `look/`) was fitted to one photo and holds for all of them.
 
 What didn't help: a finer grid, carrying sand in a bow wave, driving the model from the tracked ball path,
-letting the ball ride the surface, packed sand holding a steeper slope.
+letting the ball ride the surface, packed sand holding a steeper slope, dropping the cut sand in a lip right
+at the groove's edge, relaxing slopes less often, play in the arm's radial drive.
 
 ## How close it is
 
@@ -63,13 +70,17 @@ Scored against photos of real drawings it hadn't been tuned on:
 
 | Drawings | R² |
 |---|---|
-| Clock face and 24 five-minute updates | 0.80–0.88 |
-| Seven everyday drawings (weather, text, a birthday card…) | 0.58–0.82, mean 0.65 |
-| Fractals: Apollonian gasket, tree, flowsnake | 0.49–0.57 |
+| Clock face and 24 five-minute updates | 0.76–0.89, mean 0.80 |
+| Seven everyday drawings (weather, text, a birthday card…) | 0.63–0.87, mean 0.72 |
+| Fractals: Apollonian gasket, tree, flowsnake | 0.53–0.59 |
+| Five holiday drawings in daylight (glare, another camera position) | 0.37–0.77, mean 0.56 |
 
-Two photos of the same sand agree at 0.95–0.99, so the gap is the model. Where it falls short: real sand keeps
-dense parallel rows (0.035–0.04 radii apart) crisp where the model washes them out, and real ridges are sharper,
-so the old positions of a moving line (like a clock hand) leave stronger ghosts on the table than in the model.
+Two photos of the same sand agree at 0.95–0.99, so the gap is the model. Where it falls short: in areas filled
+with dense parallel rows (0.02–0.045 radii apart) it scores about 0.6 on the everyday drawings (it was 0.5
+before the drive's play was modelled) and under 0.5 on the holiday drawings, whose fills are tight spirals:
+the real crests there are sharper and the groove bottoms narrower than the model's. Real ridges are sharper
+in general, so the old positions of a moving line (like a clock hand) leave stronger ghosts on the table than
+in the model.
 Ball and alignment noise of about 0.01 radii puts a realistic ceiling around 0.75–0.8.
 
 ## The files
