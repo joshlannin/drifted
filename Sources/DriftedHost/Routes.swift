@@ -36,6 +36,13 @@ struct SettingsInput: Decodable {
     var random: Bool?
     var loop: Bool?
     var power: Bool?
+    var rotation: Double?       // degrees counter-clockwise added to every drawing; saved, not sent to the table
+
+    /// Anything besides rotation, i.e. something to send to the table.
+    var hasTableSettings: Bool {
+        speed != nil || brightness != nil || color != nil || shifting != nil || breathing != nil
+            || shiftSeconds != nil || random != nil || loop != nil || power != nil
+    }
 }
 
 extension Daemon {
@@ -117,6 +124,11 @@ extension Daemon {
         case ("POST", ["previous"]): return try await jobResponse(command("previous", [Command.previous]), req, wait: true)
         case ("PUT", ["settings"]):
             let input = try req.json(SettingsInput.self)
+            if let r = input.rotation {
+                guard r.isFinite else { throw HTTPError(400, "rotation must be a number of degrees") }
+                setRotation(r)
+                if !input.hasTableSettings { return .json(["rotation": switches.rotation]) }
+            }
             let packets = try settingsPackets(input)
             if let b = input.brightness { lampSetBySettings(brightness: b) }
             if let p = input.power { powerSetBySettings(p) }

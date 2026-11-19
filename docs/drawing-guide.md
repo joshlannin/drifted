@@ -8,7 +8,9 @@ How to design something that looks good in the sand. Written for people and for 
   move you send, including the travel between shapes, leaves a groove.
 - Coordinates: the table is the unit disc. `xy` uses table radii (centre (0, 0), rim at distance 1,
   +x right, +y up in the table's frame). Polar uses `theta` in radians (counter-clockwise) and `rho` 0..1.
-- The table may be rotated relative to where you stand: theta zero isn't calibrated to the front yet.
+- Draw with +y as "up" for the person looking at the table. The table's own theta zero points wherever its
+  motor homed, so Drifted turns every drawing by the `rotation` setting (degrees counter-clockwise, in
+  `/status`) before sending it. Set it once per table with `settings` (`rotation`); previews aren't turned.
 - The groove is about 0.07 radii wide, so details smaller than about 0.05 radii blur together.
 - Drawing speed is about 0.12 radii of path per second, so a path 3 radii long takes about 25 s.
 

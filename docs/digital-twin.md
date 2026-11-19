@@ -31,8 +31,8 @@ fine branches that read clearly as thin lines merge into solid shapes in the san
 - **Sand physics beyond the groove:** ridges, depth, and how cleanly a new line erases an old one. Previews
   show grooves on smooth sand.
 - **What's already in the sand,** unless you clear first.
-- **Orientation:** where the table's zero angle points relative to its front isn't calibrated, so the real
-  drawing can appear rotated.
+- **Orientation:** previews are drawn with +y up. On the table, Drifted turns every drawing by the `rotation`
+  setting (measured once per table) so it stands upright for the viewer; previews aren't turned.
 - **Speed settings other than the default.**
 
 ## How close it is

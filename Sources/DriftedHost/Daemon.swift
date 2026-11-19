@@ -253,8 +253,9 @@ public final class Daemon {
 
     /// Shows a drawing using the slot ring: reuse a slot that already holds it, else overwrite the least
     /// recently used one that isn't drawing. Clients never pick ids or delete anything.
-    func show(_ pattern: SandPattern) throws -> Job {
+    func show(_ drawing: SandPattern) throws -> Job {
         try requireNoLive()
+        let pattern = oriented(drawing)
         let report = PatternValidator.validate(pattern)
         guard report.ok else { throw HTTPError(400, report.issues.filter { $0.severity == .error }.map(\.message).joined(separator: "; ")) }
         let hash = PatternValidator.contentHash(report.pattern)
@@ -276,7 +277,8 @@ public final class Daemon {
         }
     }
 
-    func save(_ pattern: SandPattern) throws -> Job {
+    func save(_ drawing: SandPattern) throws -> Job {
+        let pattern = oriented(drawing)
         let report = PatternValidator.validate(pattern)
         guard report.ok else { throw HTTPError(400, report.issues.filter { $0.severity == .error }.map(\.message).joined(separator: "; ")) }
         let hash = PatternValidator.contentHash(report.pattern)
@@ -381,6 +383,21 @@ public final class Daemon {
         try await table.send(Command.power(true))
     }
 
+    /// Which way is up: degrees counter-clockwise added to every drawing (show, save, live). Previews,
+    /// validation and saved designs stay as drawn; only what goes to the table turns.
+    func setRotation(_ degrees: Double) {
+        let d = (degrees.truncatingRemainder(dividingBy: 360) + 540).truncatingRemainder(dividingBy: 360) - 180
+        guard switches.rotation != d else { return }
+        switches.rotation = d
+        switches.save()
+        log("rotation \(d)°")
+        emit("rotation", ["degrees": d])
+    }
+
+    func oriented(_ p: SandPattern) -> SandPattern {
+        switches.rotation == 0 ? p : p.rotated(by: switches.rotation * .pi / 180)
+    }
+
     /// Keeps `switches.lamp` in step when brightness is set through /settings.
     func lampSetBySettings(brightness: Double) {
         let on = brightness > 0
@@ -413,7 +430,7 @@ public final class Daemon {
 
     func livePush(_ points: [PolarPoint], interrupt: Bool) throws -> [String: Any] {
         guard let live else { throw HTTPError(409, "no live session; POST /live/start first") }
-        let index = live.push(points, interrupt: interrupt)
+        let index = live.push(oriented(SandPattern(name: "live", points: points)).points, interrupt: interrupt)
         return ["segment": index, "depth": live.depth]
     }
 
@@ -437,6 +454,7 @@ public final class Daemon {
             "rssi": table.rssi ?? NSNull(),
             "power": switches.power,
             "lamp": switches.lamp,
+            "rotation": switches.rotation,
             "storedPatterns": table.storedPatternIds.count,
             "live": live.map { ["running": true, "depth": $0.depth] as [String: Any] } ?? ["running": false],
             "alarms": reportedAlarms.sorted().map { ["code": Int($0), "name": TableAlarm.codeNames[$0] ?? "?"] },
@@ -477,9 +495,22 @@ struct Switches: Codable {
     var lamp = true
     /// Last non-zero lamp level (0-1), used to relight it.
     var lampLevel = 0.5
+    /// Degrees (counter-clockwise) added to every drawing sent to the table, so pictures stand upright from
+    /// where people usually look at it. The table's own theta zero points wherever its motor homed.
+    var rotation = 0.0
     var file: URL?
 
-    enum CodingKeys: String, CodingKey { case power, lamp, lampLevel }
+    enum CodingKeys: String, CodingKey { case power, lamp, lampLevel, rotation }
+
+    init() {}
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        power = try c.decodeIfPresent(Bool.self, forKey: .power) ?? true
+        lamp = try c.decodeIfPresent(Bool.self, forKey: .lamp) ?? true
+        lampLevel = try c.decodeIfPresent(Double.self, forKey: .lampLevel) ?? 0.5
+        rotation = try c.decodeIfPresent(Double.self, forKey: .rotation) ?? 0
+    }
 
     static func load(_ file: URL) -> Switches {
         var s = (try? JSONDecoder().decode(Switches.self, from: Data(contentsOf: file))) ?? Switches()

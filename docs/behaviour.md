@@ -21,8 +21,9 @@ streaming and timeouts.
 
 - **Overwriting an id replaces it.** No delete needed, but the overwrite isn't atomic (Start truncates the file).
 - **Chained patterns join smoothly** if the next one starts where the last ended.
-- **Theta zero and direction:** theta increases counter-clockwise as seen from above. Where theta zero
-  points relative to the table's front isn't measured yet; drawings may appear rotated.
+- **Theta zero and direction:** theta increases counter-clockwise as seen from above. Theta zero points
+  wherever the arm homes at power-on, which has nothing to do with the room. On our test table it was 57°
+  clockwise from the webcam's up; Drifted's `rotation` setting corrects for it.
 - **Homing** runs at power-on, not on every play.
 - The ball is about 0.07 table radii across. A clearing spiral at 0.05 spacing smooths the sand but leaves
   faint concentric ridges.

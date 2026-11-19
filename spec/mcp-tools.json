@@ -312,7 +312,7 @@
       "name": "playback"
     },
     {
-      "description": "Lights and modes. color '#rrggbb' sets a fixed colour; brightness and speed are 0-1; shifting cycles the palette; random plays random stored patterns when idle.",
+      "description": "Lights and modes. color '#rrggbb' sets a fixed colour; brightness and speed are 0-1; shifting cycles the palette; random plays random stored patterns when idle; rotation (degrees counter-clockwise, saved) turns every drawing so pictures stand upright for the viewer.",
       "inputSchema": {
         "properties": {
           "breathing": {
@@ -329,6 +329,10 @@
           },
           "random": {
             "type": "boolean"
+          },
+          "rotation": {
+            "description": "Degrees counter-clockwise added to every drawing sent to the table, so up in your drawing is up for whoever looks at it. Saved by Drifted; get_status shows it.",
+            "type": "number"
           },
           "shifting": {
             "type": "boolean"

@@ -125,6 +125,7 @@ paths:
                 random: { type: boolean }
                 loop: { type: boolean }
                 power: { type: boolean, description: "Sends 0x14/16. false only pauses; it is not a real power-off (docs/protocol.md)" }
+                rotation: { type: number, description: "Degrees counter-clockwise added to every drawing sent to the table (show, save, live), so pictures stand upright for the viewer. Saved by drifted-host, never sent to the table; /status shows it. Previews are not rotated." }
       responses: { "200": { description: Job } }
   /power:
     get: { summary: "Power switch: {on}. Apple Home and the like poll this", responses: { "200": { description: "{ on }" } } }
