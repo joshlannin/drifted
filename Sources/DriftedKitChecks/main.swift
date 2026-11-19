@@ -252,5 +252,26 @@ check("scheduleTimingAndSeasons") {
     expect(ScheduleRules.parseColor("#FFD27A")! == (255, 210, 122) && ScheduleRules.parseColor("#12345") == nil)
 }
 
+check("tablePlaylists") {
+    // 0x30/3: page 1, two playlists: "Demo" [4] and an empty one.
+    let data: [UInt8] = [3, 1, 2] + Array("Demo".utf8) + [0, 1, 4, 0] + Array("id_1".utf8) + [0, 0]
+    expect(TableMessage(Packet(command: 0x30, data: data))
+           == .playlists(page: 1, [TablePlaylist(name: "Demo", ids: [4]), TablePlaylist(name: "id_1", ids: [])]))
+    expect(TableMessage(Packet(command: 0x30, data: [1])) == .playlistsBegin)
+    expect(TableMessage(Packet(command: 0x30, data: [2])) == .playlistsEnd)
+    // Trailing bytes mean the layout guess is wrong: don't pretend to understand it.
+    if case .playlists = TableMessage(Packet(command: 0x30, data: data + [9])) { expect(false, "trailing bytes accepted") }
+    expect(TableMessage(Packet(command: 0x30, data: [3])).reply == Command.confirmData)
+
+    expect(Command.createPlaylist("drifted_mix", ids: [1, 50100]).encoded()
+           == [0x7B, 22, 0x10, 1] + Array("drifted_mix".utf8) + [0, 2, 1, 0, 0xB4, 0xC3]
+              + [Packet.checksumForChecks([0x7B, 22, 0x10, 1] + Array("drifted_mix".utf8) + [0, 2, 1, 0, 0xB4, 0xC3])])
+    expect(Command.replacePlaylist("a", name: "b", ids: [7]).data == [3, 0x61, 0, 0x62, 0, 1, 7, 0])
+    expect(Command.selectPlaylist("drifted_mix").data == [8] + Array("drifted_mix".utf8) + [0])
+    expect(Command.createPlaylist("x", ids: Array(1...20)).encoded().count < 200, "20 ids fit the table's 200-byte frame limit")
+    expect(Command.isSafePlaylistName("drifted_mix") && !Command.isSafePlaylistName("Drifted Mix")
+           && !Command.isSafePlaylistName(String(repeating: "a", count: 19)) && !Command.isSafePlaylistName(""))
+}
+
 print(failures == 0 ? "All checks passed" : "\(failures) check(s) failed")
 exit(failures == 0 ? 0 : 1)

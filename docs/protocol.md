@@ -58,7 +58,12 @@ answering the ~2 Hz state broadcast with ConfirmData, which keeps the session al
 
 | cmd | action | what | arguments |
 |---|---|---|---|
-| 0x10 | 1..8 | playlists and favourites | strings, u16 arrays |
+| 0x10 | 1 | create playlist (same name replaces it) | `name:string, ids:u16 array` (**at most 20 ids**) |
+| 0x10 | 2 | delete playlist | `name:string` |
+| 0x10 | 3 | rewrite playlist | `old:string, name:string, ids:u16 array` (at most 20) |
+| 0x10 | 4 / 5 | add / remove ids | `name:string, ids:u16 array` |
+| 0x10 | 6 / 7 | add / remove favourites | `ids:u16 array` (at most 60 in all) |
+| 0x10 | 8 | **select playlist**: makes it current and starts its first id | `name:string` |
 | 0x11 | 1 / 3 / 2 | rewrite the colour palette: start(count) → data(page, list of name+rgb) → end(count) | each confirmed |
 | 0x11 | 4 | **light mode** (persists) | `shifting:bool, shiftTime:u16 seconds, breathing:bool, brightness:u8 0..100` |
 | 0x11 | 5 | request colours | – |
@@ -94,7 +99,7 @@ integration built from these docs, on an ST-300. Not yet confirmed on our test t
 
 | cmd | action | meaning |
 |---|---|---|
-| 0x30 | 1..4 | playlists: strings and u16 arrays in pages, but the exact layout isn't pinned down. Parse defensively (ha-homedics-drift tries several layouts). |
+| 0x30 | 1 / 3 / 2 | playlists: start, pages `page:u8, n:u8, n × (name:string, ids:u16 array)`, end. Sent at connect and again after every 0x10 change |
 | 0x31 | 1..4 | colours: `0x31/3 page:u8, count:u8, count × (name:string, r, g, b)`; `0x31/4` echoes light mode |
 | 0x32 | 1 / 2 | sleep schedule / **asks for the current time** |
 | 0x33 | 1..3 | stored pattern ids: start, end, data `page:u8, ids:u16 array`. Re-sent after uploads and deletes. |
@@ -104,7 +109,7 @@ integration built from these docs, on an ST-300. Not yet confirmed on our test t
 | 0x34 | 5 | upload failed `patternId` |
 | 0x34 | 6 | not enough storage `patternId` |
 | 0x35 | 1 | running state, about twice a second (below) |
-| 0x36 | 1..3 | favourites |
+| 0x36 | 1..3 | favourites: `0x36/3` is `01, ids:u16 array` |
 | 0x37 | 1 / 2 / 3 | fatal / recoverable / warning alarm: u16 array of codes (below) |
 | 0x38 | 1..6 | firmware update flow |
 | 0x4F | 1 | init complete |
@@ -112,6 +117,27 @@ integration built from these docs, on an ST-300. Not yet confirmed on our test t
 
 Upload replies usually arrive with the ack bit set (`b4 02`, `b4 01`, `b4 03`). The table acknowledges
 commands such as draw with a bare ConfirmData.
+
+### Playlists
+
+The table keeps playlists as files on its SD card, named by the playlist's name; the `playlistId` in the
+running state is that name. With **loop** on, when a pattern finishes the table plays the next id of the
+current playlist: in order, wrapping, with random off. There is no "every stored pattern" mode. An empty
+current playlist makes it pick id 0, which it refuses, so it stops after one pattern and next/previous do
+nothing (seen on hardware; the HoMedics app's playlists empty out when their patterns are deleted). The current
+playlist, random and loop survive a power cut.
+
+Writing one (from static analysis of the app and controller; create and select confirmed on hardware
+2026-11-19): send `0x10/1` (or `0x10/3` to rewrite one that exists), wait for the table to re-send the `0x30`
+list with it, set random off and loop on, then `0x10/8` to make it current. That starts its first id;
+`0x14/1` afterwards keeps the playlist current. Limits the firmware doesn't check, so the host must:
+
+- **At most 20 ids** per playlist. More overruns the controller's RAM (and on add/remove can crash it).
+- At most 20 playlists; creating more is silently ignored.
+- Short plain names: 18 bytes or fewer of `a-z0-9_`. Longer names break `0x14/2` and the saved settings;
+  characters FAT doesn't allow fail the save with alarm 10, which stays until the table restarts.
+- Ids aren't checked: an id with no file raises alarm 10 when its turn comes.
+- Random mode is unreliable: it never picks the first or last entry, and with one entry it reads past the end.
 
 ### Running state (`0x35/1`)
 

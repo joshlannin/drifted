@@ -16,9 +16,15 @@ struct Playlist: Codable {
     /// Set when something drawn on request should stay on the sand ("show", "live"). The playlist carries on
     /// after `next`, or `PUT /playlist {"active": true}`.
     var pausedBy: String?
+    /// Keep the shuffle on the table itself: each advance writes the next picks (at most 20) as the table's own
+    /// playlist and starts it with loop on, so the table carries on with no host in range.
+    var onTable = true
+    /// What was last written to the table's playlist.
+    var tableIds: [UInt16] = []
+    var tableWritten: Date?
     var file: URL?
 
-    enum CodingKeys: String, CodingKey { case active, shuffle, ids, queue, current, pausedBy }
+    enum CodingKeys: String, CodingKey { case active, shuffle, ids, queue, current, pausedBy, onTable, tableIds, tableWritten }
 
     init() {}
 
@@ -30,6 +36,9 @@ struct Playlist: Codable {
         queue = try c.decodeIfPresent([UInt16].self, forKey: .queue) ?? []
         current = try c.decodeIfPresent(UInt16.self, forKey: .current)
         pausedBy = try c.decodeIfPresent(String.self, forKey: .pausedBy)
+        onTable = try c.decodeIfPresent(Bool.self, forKey: .onTable) ?? false   // existing setups opt in with PUT /playlist
+        tableIds = try c.decodeIfPresent([UInt16].self, forKey: .tableIds) ?? []
+        tableWritten = try c.decodeIfPresent(Date.self, forKey: .tableWritten)
     }
 
     static func load(_ file: URL) -> Playlist {
@@ -49,6 +58,7 @@ struct PlaylistInput: Decodable {
     var active: Bool?
     var shuffle: Bool?
     var ids: [Int]?
+    var onTable: Bool?
 }
 
 extension Daemon {
@@ -68,6 +78,12 @@ extension Daemon {
            playlistPool().contains(s.patternId) || seasonPool().ids.contains(s.patternId) {
             playlist.current = s.patternId
             playlist.save()
+            // The table moved on by itself (its own playlist): the season lamp steps as it would for ours.
+            if playlist.onTable, s.playlistId == Self.tablePlaylistName, Date().timeIntervalSince(playlistLastStart) > 15 {
+                log("playlist: the table moved on to \(s.patternId)\(slots.name(of: s.patternId).map { " (\($0))" } ?? "")")
+                syncSeasonLamp(advance: true)
+                emit("playlist", playlistJSON())
+            }
         }
     }
 
@@ -130,6 +146,7 @@ extension Daemon {
     @discardableResult
     func playlistAdvance(_ why: String) -> Job? {
         playlist.pausedBy = nil
+        if playlist.onTable { return tablePlaylistWrite(why, start: true) }
         guard let id = playlistNextId() else {
             log("playlist: nothing to play (no stored patterns match)")
             playlist.save()
@@ -151,6 +168,8 @@ extension Daemon {
         guard playlist.active, playlist.pausedBy != reason else { return }
         playlist.pausedBy = reason
         playlist.save()
+        // The table's own loop would move on after the drawing; loop goes back on when the playlist carries on.
+        if playlist.onTable { _ = command("loop off", [Command.loopMode(false)]) }
         log("playlist: holding (\(reason)); it carries on after next or PUT /playlist {\"active\": true}")
         emit("playlist", playlistJSON())
     }
@@ -162,12 +181,18 @@ extension Daemon {
             playlist.queue = []
         }
         if let s = input.shuffle, s != playlist.shuffle { playlist.shuffle = s; playlist.queue = [] }
+        let wasTable = playlist.active && playlist.onTable
+        if let t = input.onTable { playlist.onTable = t }
         if let a = input.active {
             playlist.active = a
             playlist.pausedBy = nil
             playlistLastStart = .distantPast
         }
         playlist.save()
+        // Leaving table mode: stop the table's own loop so drifted-host's tick is the only thing that advances.
+        if wasTable && !(playlist.active && playlist.onTable) { _ = command("loop off", [Command.loopMode(false)]) }
+        // Entering it: write the list now; it starts at the next advance, so nothing on the sand is drawn over.
+        if !wasTable && playlist.active && playlist.onTable { tablePlaylistWrite("table playlist on", start: false) }
         log("playlist: \(playlist.active ? "on" : "off"), \(playlist.shuffle ? "shuffle" : "in order"), "
             + "\(playlist.ids.isEmpty ? "all stored patterns" : "\(playlist.ids.count) ids")")
         emit("playlist", playlistJSON())
@@ -176,12 +201,115 @@ extension Daemon {
     func playlistJSON() -> [String: Any] {
         let pool = playlistPool()
         var out: [String: Any] = ["active": playlist.active, "shuffle": playlist.shuffle,
-                                  "ids": playlist.ids.map(Int.init), "patterns": pool.count]
+                                  "ids": playlist.ids.map(Int.init), "patterns": pool.count, "onTable": playlist.onTable]
+        var onTable: [String: Any] = ["name": Self.tablePlaylistName, "ids": playlist.tableIds.map(Int.init),
+                                      "current": table.tableState?.playlistId ?? NSNull(),
+                                      "stored": table.tablePlaylists.map { ["name": $0.name, "count": $0.ids.count] as [String: Any] }]
+        if let w = playlist.tableWritten { onTable["written"] = ISO8601DateFormatter().string(from: w) }
+        out["table"] = onTable
         if let c = playlist.current { out["current"] = Int(c) }
         if let p = playlist.pausedBy { out["holding"] = p }
         if playlist.shuffle { out["leftThisRound"] = playlist.queue.filter(pool.contains).count }
         let seasonal = seasonPool().ids
         if !seasonal.isEmpty { out["seasonPatterns"] = seasonal.count }
         return out
+    }
+
+    // MARK: The table's own playlist
+
+    /// Ours, on the table. Short and plain (Command.isSafePlaylistName).
+    static let tablePlaylistName = "drifted_mix"
+
+    /// The next picks for the table's playlist: up to 20, in play order, from the same shuffle (and seasons).
+    func playlistNextBatch() -> [UInt16] {
+        var out: [UInt16] = []
+        let seasonal = Set(seasonPool().ids)
+        var tries = 0
+        while out.count < Command.maxPlaylistIds, tries < 4 * Command.maxPlaylistIds {
+            tries += 1
+            guard let id = playlistNextId() else { break }
+            playlist.current = id   // in-order mode steps from the last pick
+            // Everyday patterns once per list; seasonal ones may repeat, never back to back.
+            if id == 0 || id == out.last || (out.contains(id) && !seasonal.contains(id)) { continue }
+            out.append(id)
+        }
+        return out
+    }
+
+    /// Writes the next picks to the table as `drifted_mix` and, with `start`, starts it (loop on, random off).
+    @discardableResult
+    func tablePlaylistWrite(_ why: String, start: Bool) -> Job? {
+        let before = playlist.current
+        let batch = playlistNextBatch()
+        guard let first = batch.first else {
+            playlist.current = before
+            log("playlist: nothing to play (no stored patterns match)")
+            playlist.save()
+            return nil
+        }
+        playlist.current = start ? first : before
+        playlist.tableIds = batch
+        playlist.save()
+        if start { playlistLastStart = Date() }
+        log("playlist: \(why); writing \(batch.count) patterns to the table's playlist \(Self.tablePlaylistName)"
+            + (start ? ", starting with \(first)\(slots.name(of: first).map { " (\($0))" } ?? "")" : ""))
+        if start { syncSeasonLamp(advance: true) }
+        let job = enqueue("table playlist") { _ in
+            if start { try await self.wakeForDrawing() }
+            do {
+                try await self.writeTablePlaylist(batch)
+            } catch DriftError.timeout(let what) where start {
+                // Keep drawing even if the table didn't take the list; drifted-host's own tick carries on.
+                self.log("playlist: the table didn't confirm its playlist (\(what)); playing \(first) directly")
+                try await self.table.play(first)
+                return ["playlist": "not written", "id": "\(first)"]
+            }
+            self.playlist.tableWritten = Date()
+            self.playlist.save()
+            if start { try await self.startTablePlaylist(first) }
+            return ["playlist": Self.tablePlaylistName, "ids": batch.map(String.init).joined(separator: ",")]
+        }
+        if start { playlistJob = job.id }
+        emit("playlist", playlistJSON())
+        return job
+    }
+
+    /// Writes the list and waits for the table to re-send its playlists with it saved.
+    private func writeTablePlaylist(_ ids: [UInt16]) async throws {
+        let name = Self.tablePlaylistName
+        let exists = table.tablePlaylists.contains { $0.name == name }
+        if !exists && table.tablePlaylists.count >= Command.maxPlaylists {
+            throw HTTPError(507, "the table already holds \(Command.maxPlaylists) playlists")
+        }
+        let m = table.mark()
+        try await table.send(exists ? Command.replacePlaylist(name, name: name, ids: ids) : Command.createPlaylist(name, ids: ids))
+        let want = TablePlaylist(name: name, ids: ids)
+        _ = try await table.waitFor(after: m, timeout: 20, what: "the table to save playlist \(name)") { msg -> Bool? in
+            if case .playlists(_, let lists) = msg, lists.contains(want) { return true }
+            return nil
+        }
+    }
+
+    /// Loop on, random off (the table's random never picks the first or last entry), then select: that
+    /// starts the list's first pattern. Falls back to a plain play if the table doesn't start it.
+    private func startTablePlaylist(_ first: UInt16) async throws {
+        if let s = table.tableState {
+            if s.randomMode { try await table.send(Command.randomMode(false)) }
+            if !s.loopMode { try await table.send(Command.loopMode(true)) }
+        } else {
+            try await table.send(Command.randomMode(false))
+            try await table.send(Command.loopMode(true))
+        }
+        let m = table.mark()
+        try await table.send(Command.selectPlaylist(Self.tablePlaylistName))
+        do {
+            _ = try await table.waitFor(after: m, timeout: 6, what: "the table playlist to start") { msg -> Bool? in
+                if case .state(let s) = msg, s.status == 1, s.patternId == first { return true }
+                return nil
+            }
+        } catch DriftError.timeout {
+            log("playlist: selecting the table playlist didn't start \(first); playing it directly")
+            try await table.play(first)
+        }
     }
 }

@@ -61,6 +61,8 @@ public final class DriftTable: NSObject, ObservableObject {
     /// Most recent 0x37 alarm (the table repeats fatal ones about every second).
     @Published public private(set) var lastAlarm: TableAlarm?
     @Published public private(set) var storedPatternIds: Set<UInt16> = []
+    /// The playlists the table reported (0x30), re-sent after every playlist change.
+    @Published public private(set) var tablePlaylists: [TablePlaylist] = []
     @Published public private(set) var log: [LogLine] = []
     @Published public private(set) var connectedName: String?
     /// Signal strength of the connected table in dBm, read every 30 s. Below about -85 the link is
@@ -255,6 +257,14 @@ public final class DriftTable: NSObject, ObservableObject {
             storedPatternIds.formUnion(ids)
         case .other(let p) where p.command == 0x33 && p.action == 1:
             storedPatternIds = []
+        case .playlistsBegin:
+            tablePlaylists = []
+        case .playlists(_, let lists):
+            for l in lists {
+                if let i = tablePlaylists.firstIndex(where: { $0.name == l.name }) { tablePlaylists[i] = l } else { tablePlaylists.append(l) }
+            }
+        case .other(let p) where p.command == 0x30:
+            note("Unrecognised playlist message: \(p.encoded().hex)")
         case .alarm(let kind, let codes):
             let alarm = TableAlarm(kind: kind, codes: codes, at: Date())
             if lastAlarm.map({ $0.kind != kind || $0.codes != codes || alarm.at.timeIntervalSince($0.at) > 30 }) ?? true {

@@ -47,6 +47,8 @@ struct ByteReader {
         return String(decoding: bytes[index..<end], as: UTF8.self)
     }
 
+    var atEnd: Bool { index >= bytes.count }
+
     mutating func rgb() -> (UInt8, UInt8, UInt8)? {
         guard let r = u8(), let g = u8(), let b = u8() else { return nil }
         return (r, g, b)
@@ -158,6 +160,47 @@ public enum Command {
 
     /// Selects a palette colour by name (0x14/13). `previewColor` then `selectColor("Temp")` = a fixed custom colour.
     public static func selectColor(_ name: String) -> Packet { make(userActions, 13) { $0.string(name) } }
+
+    // MARK: Playlists (0x10). Firmware limits (driftnow-private notes, static analysis): at most 20 playlists;
+    // create and replace don't check the id count and more than 20 ids overruns the table's RAM; names of
+    // 19+ bytes break 0x14/2 and the settings file, and FAT-illegal characters fail the save with alarm 10.
+
+    /// Most ids one playlist may hold. Never send more.
+    public static let maxPlaylistIds = 20
+    /// Most playlists the table keeps; creating another is ignored.
+    public static let maxPlaylists = 20
+
+    /// Short, plain names only: 1–18 bytes of a–z, 0–9 and _.
+    public static func isSafePlaylistName(_ name: String) -> Bool {
+        (1...18).contains(name.utf8.count) && name.utf8.allSatisfy { (0x61...0x7A).contains($0) || (0x30...0x39).contains($0) || $0 == 0x5F }
+    }
+
+    private static func checkPlaylist(_ name: String, _ ids: [UInt16]) {
+        precondition(isSafePlaylistName(name), "unsafe playlist name")
+        precondition(!ids.isEmpty && ids.count <= maxPlaylistIds && !ids.contains(0), "playlist ids must be 1–20 non-zero ids")
+    }
+
+    /// 0x10/1: creates a playlist (replaces one with the same name). The table answers by re-sending the 0x30 list.
+    public static func createPlaylist(_ name: String, ids: [UInt16]) -> Packet {
+        checkPlaylist(name, ids)
+        return make(sendsData, 1) { $0.string(name); $0.u16Array(ids) }
+    }
+
+    /// 0x10/3: rewrites playlist `old` as `name` with `ids`.
+    public static func replacePlaylist(_ old: String, name: String, ids: [UInt16]) -> Packet {
+        checkPlaylist(name, ids)
+        precondition(isSafePlaylistName(old))
+        return make(sendsData, 3) { $0.string(old); $0.string(name); $0.u16Array(ids) }
+    }
+
+    /// 0x10/2: deletes a playlist.
+    public static func deletePlaylist(_ name: String) -> Packet { make(sendsData, 2) { $0.string(name) } }
+
+    /// 0x10/8: makes `name` the current playlist and starts its first id at once. Kept across power cycles.
+    public static func selectPlaylist(_ name: String) -> Packet {
+        precondition(isSafePlaylistName(name))
+        return make(sendsData, 8) { $0.string(name) }
+    }
 
     public static func randomMode(_ on: Bool) -> Packet { make(userActions, 10) { $0.bool(on) } }
     public static func loopMode(_ on: Bool) -> Packet { make(userActions, 11) { $0.bool(on) } }

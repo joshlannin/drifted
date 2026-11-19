@@ -24,6 +24,14 @@ public struct TableState: Equatable {
     public var shiftSeconds: UInt16 = 0
 }
 
+/// A playlist stored on the table (`0://list/<name>.ls`). With loop on and random off the table plays its
+/// current playlist's ids in order, wrapping, with no host (docs/protocol.md, Playlists).
+public struct TablePlaylist: Equatable, Sendable {
+    public var name: String
+    public var ids: [UInt16]
+    public init(name: String, ids: [UInt16]) { self.name = name; self.ids = ids }
+}
+
 /// Table → app messages we understand.
 public enum TableMessage: Equatable {
     case waitingForConnection                  // 0x50/1
@@ -31,6 +39,9 @@ public enum TableMessage: Equatable {
     case initComplete                          // 0x4F/1
     case requestsTime                          // 0x32/2
     case storedPatterns(page: UInt8, ids: [UInt16])   // 0x33/3
+    case playlistsBegin                        // 0x30/1: the playlist list follows
+    case playlists(page: UInt8, [TablePlaylist])      // 0x30/3
+    case playlistsEnd                          // 0x30/2
     case uploadMissingPages([Int])             // 0x34/1 (1-based)
     case uploadStarted(UInt16)                 // 0x34/2
     case uploadComplete(UInt16)                // 0x34/3
@@ -51,6 +62,10 @@ public enum TableMessage: Equatable {
         case (0x33, 3):
             let page = r.u8() ?? 0
             self = .storedPatterns(page: page, ids: r.u16Array() ?? [])
+        case (0x30, 1): self = .playlistsBegin
+        case (0x30, 2): self = .playlistsEnd
+        case (0x30, 3):
+            if let (page, lists) = Self.parsePlaylists(&r) { self = .playlists(page: page, lists) } else { self = .other(packet) }
         case (0x34, 1): self = .uploadMissingPages((r.u16Array() ?? []).map(Int.init))
         case (0x34, 2): self = .uploadStarted(r.u16() ?? 0)
         case (0x34, 3): self = .uploadComplete(r.u16() ?? 0)
@@ -63,6 +78,18 @@ public enum TableMessage: Equatable {
             self = .alarm(kind: kind, codes: r.u16Array() ?? [])
         default: self = .other(packet)
         }
+    }
+
+    /// `page:u8, n:u8, n × (name:string, ids:u16 array)`. Nil unless it uses the payload exactly.
+    static func parsePlaylists(_ r: inout ByteReader) -> (UInt8, [TablePlaylist])? {
+        guard let page = r.u8(), let n = r.u8() else { return nil }
+        var out: [TablePlaylist] = []
+        for _ in 0..<n {
+            guard let name = r.string(), let ids = r.u16Array() else { return nil }
+            out.append(TablePlaylist(name: name, ids: ids))
+        }
+        guard r.atEnd else { return nil }
+        return (page, out)
     }
 
     private static func parseState(_ r: inout ByteReader) -> TableState? {

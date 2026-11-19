@@ -36,6 +36,9 @@ public struct Packet: Equatable, CustomStringConvertible {
     }
 
     public var description: String { encoded().hex }
+
+    /// For DriftedKitChecks.
+    public static func checksumForChecks(_ bytes: [UInt8]) -> UInt8 { checksum(bytes) }
 }
 
 extension Sequence where Element == UInt8 {

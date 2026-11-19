@@ -312,7 +312,7 @@
       "name": "playback"
     },
     {
-      "description": "Drifted's playlist keeps the table going: when a pattern finishes, Drifted starts the next stored one (shuffled unless shuffle=false). ids limits it to those pattern ids; an empty list means every stored pattern. show_pattern and live sessions put it on hold so the drawing stays on the sand; playback next or active=true carries on. Saved across restarts. Call with no arguments to read it.",
+      "description": "Drifted's playlist keeps the table going: when a pattern finishes, Drifted starts the next stored one (shuffled unless shuffle=false). ids limits it to those pattern ids; an empty list means every stored pattern. show_pattern and live sessions put it on hold so the drawing stays on the sand; playback next or active=true carries on. With onTable (recommended), each advance writes the next picks (at most 20) to the table as its own playlist with loop on, so the table keeps going even when Drifted is out of range; table shows what the table holds. Saved across restarts. Call with no arguments to read it.",
       "inputSchema": {
         "properties": {
           "active": {
@@ -324,6 +324,10 @@
               "type": "integer"
             },
             "type": "array"
+          },
+          "onTable": {
+            "description": "Keep the shuffle on the table itself (its own playlist, loop on)",
+            "type": "boolean"
           },
           "shuffle": {
             "type": "boolean"

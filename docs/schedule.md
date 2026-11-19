@@ -10,6 +10,10 @@ weather is what turns it back on.
 | `weatherAt` (e.g. 04:15) | Fetch today's forecast and draw the weather picture: an emblem for the conditions under the day's high (the same picture as [designs/weather.py](../designs/weather.py), about 15 minutes). Drawing turns the table on. The playlist holds, so the picture stays on the sand |
 | `playlistAt` (e.g. 09:00) | End the hold and start the playlist's next pattern ([playlist](../spec/openapi.yaml)) |
 
+With the playlist's `onTable` on, the playlist step writes the day's picks (at most 20) to the table as its
+own playlist and starts it with loop on, so the table keeps going even if Drifted loses the connection; the
+hold turns the table's loop off so the weather picture stays.
+
 Set it with `PUT /schedule` or the MCP `schedule` tool. It's saved in the state dir as `schedule.json` (location
 included, so it never goes in a repo); what ran today is in `schedule-state.json`. Each step is logged to the
 host log.
