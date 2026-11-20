@@ -26,7 +26,7 @@ host log.
   "location": {"latitude": 51.48, "longitude": 0.0},
   "units": "celsius",
   "seasons": [
-    {"name": "Chanukah", "start": "2026-12-04", "end": "2026-12-12", "ids": [], "colors": ["#ffb81c"], "playlistAt": "06:00"},
+    {"name": "Chanukah", "start": "2026-12-04", "end": "2026-12-12", "ids": [], "weight": 1, "colors": ["#ffb81c"], "playlistAt": "06:00", "weather": false},
     {"name": "Christmas", "start": "12-01", "end": "12-26", "ids": [], "weight": 0.5, "colors": ["#d0101c", "#0f8a3c"]}
   ]
 }
@@ -82,6 +82,9 @@ year only).
   holiday patterns are on by breakfast). With several, the earliest wins; the weather then has until 30
   minutes before it. It can't turn on a playlist step that's off. `GET /schedule` gives today's time as
   `status.playlistAtToday`.
+- **No weather.** `"weather": false` on a season skips the weather picture on its days, so the day starts
+  with the playlist step (which turns the table on). `GET /schedule` gives `status.weatherAtToday` (null when
+  off).
 
 ## Testing
 

@@ -244,6 +244,10 @@ check("scheduleTimingAndSeasons") {
     expect(ScheduleRules.playlistTime("09:00", seasonTimes: ["07:30", "06:00", "bad"]) == "06:00")
     expect(ScheduleRules.playlistTime("09:00", seasonTimes: ["10:00"]) == "10:00")
     expect(ScheduleRules.playlistTime(nil, seasonTimes: ["06:00"]) == nil)
+    expect(ScheduleRules.weatherTime("04:15", seasonsWantWeather: []) == "04:15")
+    expect(ScheduleRules.weatherTime("04:15", seasonsWantWeather: [true, true]) == "04:15")
+    expect(ScheduleRules.weatherTime("04:15", seasonsWantWeather: [true, false]) == nil)
+    expect(ScheduleRules.weatherTime(nil, seasonsWantWeather: [true]) == nil)
     expect(ScheduleRules.weatherGiveUp(weatherAt: w, playlistAt: 6 * 60) == 5 * 60 + 30)
 
     var cal = Calendar(identifier: .gregorian); cal.timeZone = TimeZone(identifier: "America/Denver")!

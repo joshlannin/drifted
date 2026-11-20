@@ -409,6 +409,10 @@
                   "description": "MM-DD (every year) or YYYY-MM-DD, inclusive",
                   "type": "string"
                 },
+                "weather": {
+                  "description": "false skips the morning weather picture on the season's days (default true)",
+                  "type": "boolean"
+                },
                 "weight": {
                   "description": "Share of picks from ids: 0.5 every other pattern (default), 1 only these",
                   "type": "number"
