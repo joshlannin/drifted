@@ -8,7 +8,7 @@ weather is what turns it back on.
 | Time | What happens |
 |---|---|
 | `weatherAt` (e.g. 04:15) | Fetch today's forecast and draw the weather picture: an emblem for the conditions under the day's high (the same picture as [designs/weather.py](../designs/weather.py), about 15 minutes). Drawing turns the table on. The playlist holds, so the picture stays on the sand |
-| `playlistAt` (e.g. 09:00) | End the hold and start the playlist's next pattern ([playlist](../spec/openapi.yaml)) |
+| `playlistAt` (e.g. 09:00) | End the hold and start the playlist's next pattern ([playlist](../spec/openapi.yaml)). A season can set its own time (below) |
 
 With the playlist's `onTable` on, the playlist step writes the day's picks (at most 20) to the table as its
 own playlist and starts it with loop on, so the table keeps going even if Drifted loses the connection; the
@@ -26,7 +26,7 @@ host log.
   "location": {"latitude": 51.48, "longitude": 0.0},
   "units": "celsius",
   "seasons": [
-    {"name": "Chanukah", "start": "2026-12-04", "end": "2026-12-12", "ids": [], "colors": ["#ffb81c"]},
+    {"name": "Chanukah", "start": "2026-12-04", "end": "2026-12-12", "ids": [], "colors": ["#ffb81c"], "playlistAt": "06:00"},
     {"name": "Christmas", "start": "12-01", "end": "12-26", "ids": [], "weight": 0.5, "colors": ["#d0101c", "#0f8a3c"]}
   ]
 }
@@ -78,6 +78,10 @@ year only).
   table reported it just before (colour, shifting, breathing) and puts it back when the season ends; a colour
   set through `/settings` during a season is what comes back. Brightness isn't touched. While the lamp switch
   is off nothing is sent; the colour is applied when it's turned on.
+- **Earlier start.** `playlistAt` on a season moves the playlist step on its days (e.g. `"06:00"`, so the
+  holiday patterns are on by breakfast). With several, the earliest wins; the weather then has until 30
+  minutes before it. It can't turn on a playlist step that's off. `GET /schedule` gives today's time as
+  `status.playlistAtToday`.
 
 ## Testing
 

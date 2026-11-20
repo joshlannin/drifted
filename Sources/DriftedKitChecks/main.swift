@@ -239,6 +239,12 @@ check("scheduleTimingAndSeasons") {
     expect(!ScheduleRules.weatherCatchUp(minute: 10 * 60, weatherAt: w, playlistAt: nil))
     // Playlist: up to 3 hours late.
     expect(ScheduleRules.playlistCatchUp(minute: p + 179, playlistAt: p) && !ScheduleRules.playlistCatchUp(minute: p + 180, playlistAt: p))
+    // A season's own playlist time wins (the earliest of several); the step stays off when playlistAt is off.
+    expect(ScheduleRules.playlistTime("09:00", seasonTimes: []) == "09:00")
+    expect(ScheduleRules.playlistTime("09:00", seasonTimes: ["07:30", "06:00", "bad"]) == "06:00")
+    expect(ScheduleRules.playlistTime("09:00", seasonTimes: ["10:00"]) == "10:00")
+    expect(ScheduleRules.playlistTime(nil, seasonTimes: ["06:00"]) == nil)
+    expect(ScheduleRules.weatherGiveUp(weatherAt: w, playlistAt: 6 * 60) == 5 * 60 + 30)
 
     var cal = Calendar(identifier: .gregorian); cal.timeZone = TimeZone(identifier: "America/Denver")!
     func day(_ y: Int, _ m: Int, _ d: Int, _ h: Int = 12) -> Date { cal.date(from: DateComponents(year: y, month: m, day: d, hour: h))! }

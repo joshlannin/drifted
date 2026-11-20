@@ -21,11 +21,16 @@ struct ScheduleConfig: Codable, Equatable {
         var weight = 0.5
         /// "#rrggbb". One is a fixed colour; with more, the lamp moves to the next with each pattern.
         var colors: [String] = []
+        /// Local "HH:mm": on the season's days the playlist step runs at this time instead of the routine's
+        /// `playlistAt` (e.g. "06:00" to get to the holiday patterns early).
+        var playlistAt: String?
 
-        enum CodingKeys: String, CodingKey { case name, start, end, ids, weight, colors }
+        enum CodingKeys: String, CodingKey { case name, start, end, ids, weight, colors, playlistAt }
 
-        init(name: String, start: String, end: String, ids: [UInt16] = [], weight: Double = 0.5, colors: [String] = []) {
+        init(name: String, start: String, end: String, ids: [UInt16] = [], weight: Double = 0.5, colors: [String] = [],
+             playlistAt: String? = nil) {
             self.name = name; self.start = start; self.end = end; self.ids = ids; self.weight = weight; self.colors = colors
+            self.playlistAt = playlistAt
         }
 
         init(from decoder: Decoder) throws {
@@ -36,6 +41,7 @@ struct ScheduleConfig: Codable, Equatable {
             ids = try c.decodeIfPresent([UInt16].self, forKey: .ids) ?? []
             weight = try c.decodeIfPresent(Double.self, forKey: .weight) ?? 0.5
             colors = try c.decodeIfPresent([String].self, forKey: .colors) ?? []
+            playlistAt = try c.decodeIfPresent(String.self, forKey: .playlistAt)
         }
 
         /// Whether `date` (local calendar day) falls in the season.
@@ -49,6 +55,7 @@ struct ScheduleConfig: Codable, Equatable {
             else { throw HTTPError(400, "season \(name): start and end must both be MM-DD or both YYYY-MM-DD") }
             guard (0...1).contains(weight) else { throw HTTPError(400, "season \(name): weight must be 0-1") }
             for c in colors where ScheduleRules.parseColor(c) == nil { throw HTTPError(400, "season \(name): colour \(c) isn't #rrggbb") }
+            if let t = playlistAt, ScheduleRules.parseTime(t) == nil { throw HTTPError(400, "season \(name): playlistAt must be HH:mm (24-hour)") }
         }
     }
 
@@ -87,7 +94,14 @@ struct ScheduleConfig: Codable, Equatable {
 
     var fahrenheit: Bool { units == "fahrenheit" }
     var weatherMinute: Int? { weatherAt.flatMap(ScheduleRules.parseTime) }
-    var playlistMinute: Int? { playlistAt.flatMap(ScheduleRules.parseTime) }
+
+    /// When the playlist step runs on `date`: an active season's own time (the earliest, if several have one),
+    /// else `playlistAt`. Nil when the playlist step is off.
+    func playlistTime(on date: Date) -> String? {
+        ScheduleRules.playlistTime(playlistAt, seasonTimes: activeSeasons(on: date).compactMap(\.playlistAt))
+    }
+
+    func playlistMinute(on date: Date) -> Int? { playlistTime(on: date).flatMap(ScheduleRules.parseTime) }
 
     func activeSeasons(on date: Date) -> [Season] { seasons.filter { $0.contains(date) } }
 
@@ -131,6 +145,14 @@ public enum ScheduleRules {
     /// A missed playlist step still runs up to 3 hours late; later than that it waits for tomorrow, so a Mac
     /// that wakes in the evening doesn't start the table after it was turned off for the night.
     public static func playlistCatchUp(minute m: Int, playlistAt p: Int) -> Bool { m - p < 180 }
+
+    /// The playlist step's time for a day: the earliest of the active seasons' own times, else the routine's.
+    /// The step stays off (nil) when the routine's `playlistAt` is off.
+    public static func playlistTime(_ base: String?, seasonTimes: [String]) -> String? {
+        guard base != nil else { return nil }
+        let valid = seasonTimes.filter { parseTime($0) != nil }
+        return valid.min { parseTime($0)! < parseTime($1)! } ?? base
+    }
 
     /// When the weather step stops retrying (minutes into the day).
     public static func weatherGiveUp(weatherAt w: Int, playlistAt p: Int?) -> Int { p.map { $0 > w ? $0 - 30 : w + 240 } ?? w + 240 }
@@ -264,8 +286,9 @@ extension Daemon {
         syncSeasonLamp(now: now)
         guard schedule.enabled, scheduleWeatherTask == nil else { return }
         let today = Self.dayString(now), m = Self.minuteOfDay(now)
+        let playlistAt = schedule.playlistTime(on: now), playlistMinute = schedule.playlistMinute(on: now)
         if let w = schedule.weatherMinute, m >= w, scheduleState.weatherDay != today {
-            if ScheduleRules.weatherCatchUp(minute: m, weatherAt: w, playlistAt: schedule.playlistMinute) {
+            if ScheduleRules.weatherCatchUp(minute: m, weatherAt: w, playlistAt: playlistMinute) {
                 if m - w > 5 { log("schedule: the \(schedule.weatherAt!) weather didn't run (asleep or restarted); running it now") }
                 runScheduledWeather()
                 return
@@ -274,14 +297,15 @@ extension Daemon {
             saveScheduleState()
             log("schedule: missed the \(schedule.weatherAt!) weather and it's too close to the playlist (or too late); skipping it today")
         }
-        if let p = schedule.playlistMinute, m >= p, scheduleState.playlistDay != today {
+        if let p = playlistMinute, m >= p, scheduleState.playlistDay != today {
             scheduleState.playlistDay = today
             saveScheduleState()
+            let season = playlistAt != schedule.playlistAt ? " (season)" : ""
             if ScheduleRules.playlistCatchUp(minute: m, playlistAt: p) {
-                log("schedule: \(schedule.playlistAt!) playlist\(m - p > 5 ? " (late: the Mac was asleep or the host restarted)" : "")")
+                log("schedule: \(playlistAt!) playlist\(season)\(m - p > 5 ? " (late: the Mac was asleep or the host restarted)" : "")")
                 _ = playlistStep()
             } else {
-                log("schedule: missed the \(schedule.playlistAt!) playlist by more than 3 hours; skipping it today")
+                log("schedule: missed the \(playlistAt!) playlist\(season) by more than 3 hours; skipping it today")
             }
         }
     }
@@ -312,7 +336,7 @@ extension Daemon {
         scheduleWeatherTask = Task { @MainActor in
             defer { self.scheduleWeatherTask = nil }
             let day = Self.dayString(Date())
-            let giveUp = ScheduleRules.weatherGiveUp(weatherAt: self.schedule.weatherMinute ?? 0, playlistAt: self.schedule.playlistMinute)
+            let giveUp = ScheduleRules.weatherGiveUp(weatherAt: self.schedule.weatherMinute ?? 0, playlistAt: self.schedule.playlistMinute(on: Date()))
             var attempt = 1
             while true {
                 var forecast: Forecast?
@@ -485,14 +509,16 @@ extension Daemon {
         if let v = input.units { next.units = v }
         if let v = input.seasons { next.seasons = v }
         try next.validate()
-        let timingChanged = next.enabled != schedule.enabled || next.weatherAt != schedule.weatherAt || next.playlistAt != schedule.playlistAt
+        let now = Date()
+        let timingChanged = next.enabled != schedule.enabled || next.weatherAt != schedule.weatherAt
+            || next.playlistTime(on: now) != schedule.playlistTime(on: now)
         schedule = next
         schedule.save(scheduleFile)
         // Turning the routine on (or moving a time) mid-day doesn't run steps whose time has already passed.
         if timingChanged && schedule.enabled {
-            let now = Date(), today = Self.dayString(now), m = Self.minuteOfDay(now)
+            let today = Self.dayString(now), m = Self.minuteOfDay(now)
             if let w = schedule.weatherMinute, m > w { scheduleState.weatherDay = today }
-            if let p = schedule.playlistMinute, m > p { scheduleState.playlistDay = today }
+            if let p = schedule.playlistMinute(on: now), m > p { scheduleState.playlistDay = today }
             saveScheduleState()
         }
         log("schedule: \(schedule.enabled ? "on" : "off"); weather \(schedule.weatherAt ?? "off"), playlist \(schedule.playlistAt ?? "off"), "
@@ -507,6 +533,7 @@ extension Daemon {
         var status: [String: Any] = [
             "weatherSource": Forecast.weatherKitAvailable ? "weatherkit" : "open-meteo",
             "activeSeasons": schedule.activeSeasons(on: now).map(\.name),
+            "playlistAtToday": schedule.playlistTime(on: now) ?? NSNull(),
             "lampSeason": scheduleState.lampSeason ?? NSNull(),
             "today": ["weather": scheduleWeatherTask != nil ? "running" : scheduleState.weatherDay == today ? "done" : "pending",
                       "playlist": scheduleState.playlistDay == today ? "done" : "pending"],

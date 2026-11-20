@@ -57,6 +57,7 @@ components:
               ids: { type: array, items: { type: integer }, description: "Stored pattern ids to mix into the playlist. With the playlist's ids empty, they play only in season" }
               weight: { type: number, minimum: 0, maximum: 1, default: 0.5, description: "Share of playlist picks from ids: 0.5 every other pattern, 1 only these" }
               colors: { type: array, items: { type: string }, description: "#rrggbb for the lamp; with several, the next with each pattern. The first listed season with colours wins" }
+              playlistAt: { type: string, description: "HH:mm (24-hour, local): on the season's days the playlist step runs at this time instead of playlistAt (the earliest, if several seasons have one)" }
 paths:
   /status:
     get:
@@ -167,7 +168,7 @@ paths:
                 onTable: { type: boolean, description: "Keep the shuffle on the table: each advance writes the next picks (at most 20) as the table's own playlist (drifted_mix) and starts it with loop on, so the table carries on with no host. Turning it on writes the list without starting it; holds turn the table's loop off" }
       responses: { "200": { description: Playlist } }
   /schedule:
-    get: { summary: "The daily routine (docs/schedule.md) and today's status: {enabled, weatherAt, playlistAt, location, units, seasons, status}", responses: { "200": { description: Schedule } } }
+    get: { summary: "The daily routine (docs/schedule.md) and today's status: {enabled, weatherAt, playlistAt, location, units, seasons, status}; status.playlistAtToday is when the playlist step runs today", responses: { "200": { description: Schedule } } }
     put:
       summary: "Change the daily routine; fields left out stay as they are. Saved in the state dir (schedule.json). Turning it on, or moving a time, mid-day doesn't run steps whose time has passed"
       requestBody: { content: { application/json: { schema: { $ref: "#/components/schemas/Schedule" } } } }

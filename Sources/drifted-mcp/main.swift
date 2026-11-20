@@ -88,6 +88,7 @@ let tools: [[String: Any]] = [
                         "ids": ["type": "array", "items": ["type": "integer"], "description": "Stored pattern ids to mix in"],
                         "weight": ["type": "number", "description": "Share of picks from ids: 0.5 every other pattern (default), 1 only these"],
                         "colors": ["type": "array", "items": ["type": "string"], "description": "#rrggbb; with several, the lamp moves to the next with each pattern"],
+                        "playlistAt": ["type": "string", "description": "HH:mm: on the season's days the playlist step runs at this time instead (e.g. 06:00)"],
                     ]]],
         "run": ["type": "string", "enum": ["weather", "playlist"], "description": "Do this step now"],
         "dryRun": ["type": "boolean", "description": "With run=weather: fetch and build, don't draw"],

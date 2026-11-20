@@ -401,6 +401,10 @@
                 "name": {
                   "type": "string"
                 },
+                "playlistAt": {
+                  "description": "HH:mm: on the season's days the playlist step runs at this time instead (e.g. 06:00)",
+                  "type": "string"
+                },
                 "start": {
                   "description": "MM-DD (every year) or YYYY-MM-DD, inclusive",
                   "type": "string"
