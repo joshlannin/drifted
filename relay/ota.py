@@ -155,13 +155,20 @@ def main():
         c.sock.close()   # Drifted may take the connection back meanwhile; the download carries on regardless
 
     print("Waiting for the relay to download it…")
-    deadline = time.time() + 180
-    while time.time() < deadline and progress["sent"] < size:
+    # A relay with a weak Wi-Fi signal can take several minutes: keep going for as long as it keeps downloading.
+    started = moved = time.time()
+    last = 0
+    while progress["sent"] < size and time.time() - moved < 90 and time.time() - started < 1800:
         time.sleep(1)
+        if progress["sent"] != last:
+            last, moved = progress["sent"], time.time()
         print(f"\r  {progress['sent'] * 100 // size:3d}%", end="", flush=True)
     print()
     if progress["sent"] < size:
-        sys.exit("The relay didn't download the firmware. Is this computer reachable from it (firewall)?")
+        if progress["requests"] == 0:
+            sys.exit("The relay didn't fetch the firmware. Is this computer reachable from it (firewall)?")
+        sys.exit(f"The download stopped at {progress['sent'] * 100 // size}% ({int(time.time() - started)} s). The relay's Wi-Fi is "
+                 "poor while it holds the table: release the table (Disconnect in Drifted) and try again.")
     print("Downloaded. The relay checks it, then restarts into it (about 10 s).")
     server.shutdown()
     time.sleep(12)

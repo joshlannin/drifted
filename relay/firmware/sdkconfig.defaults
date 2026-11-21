@@ -29,6 +29,11 @@ CONFIG_BT_NIMBLE_HOST_TASK_STACK_SIZE=6144
 CONFIG_ESP_COEX_SW_COEXIST_ENABLE=y
 
 CONFIG_LWIP_MAX_SOCKETS=10
+# Small TCP segments. A relay sits wherever the table is, often with a weak Wi-Fi signal, and there long
+# packets are the ones that get lost (measured: no loss at 400 bytes, 25% at 1400), which stalls a connection
+# for seconds at a time. Nothing here needs throughput: the largest transfer is a firmware update.
+CONFIG_LWIP_TCP_MSS=536
+CONFIG_LWIP_TCP_SACK_OUT=y
 CONFIG_ESP_MAIN_TASK_STACK_SIZE=4096
 CONFIG_FREERTOS_HZ=1000
 CONFIG_LOG_DEFAULT_LEVEL_INFO=y
