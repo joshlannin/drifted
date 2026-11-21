@@ -29,6 +29,11 @@ static const char *TAG = "ble";
 #define WRITE_UUID 0xFFE9
 #define NOTIFY_UUID 0xFFE4
 #define MIN_PAGE_GAP_MS 80
+// With a host connected, write ConfirmData ourselves after this long without a host write. Wi-Fi now and then
+// holds the table's packets back for 2 s or more (a lost frame waiting on a TCP retransmit), the host then
+// has nothing to answer, and the table resets the session after 2 s of silence.
+#define KEEPALIVE_MS 1000
+#define MIN_CONN_ITVL 24   // 1.25 ms units: 30 ms
 #define GATE_TIMEOUT_MS 8000
 #define CONNECT_TIMEOUT_MS 10000
 #define SCAN_MS 5000
@@ -55,13 +60,14 @@ static uint8_t s_write_props;
 static bool s_dsc_past_chr;
 
 static candidate_t s_cands[MAX_CANDIDATES];
-static int s_ncands;
+static int s_ncands, s_heard, s_scan_rsps;   // Drift candidates; reports heard this scan; scan responses among them
 static SemaphoreHandle_t s_lock;
 
 static volatile bool s_disc_active, s_report_host, s_report_console;
 static int64_t s_next_attempt_us, s_linked_at_us, s_gate_closed_at_us, s_host_left_at_us, s_last_rssi_us;
 static uint32_t s_backoff_ms = BACKOFF_MIN_MS;
 static int s_failures;
+static volatile int64_t s_last_write_us;   // last packet written to the table (host's or a keepalive)
 static ble_addr_t s_target;
 static volatile bool s_target_set, s_restart_link, s_reconnect_now;
 
@@ -92,24 +98,40 @@ static void trim(char *s) {
 }
 
 static void add_report(const ble_addr_t *addr, int8_t rssi, const uint8_t *data, uint8_t len) {
-    struct ble_hs_adv_fields f;
-    if (ble_hs_adv_parse_fields(&f, data, len) != 0) return;
+    // Walk the advertising data by hand rather than with ble_hs_adv_parse_fields, which rejects the whole
+    // report if any field is malformed. Tables put their name ("KS…\r\n\r\n") only in the scan response,
+    // and take what fits if a length runs past the end.
     char name[32] = "";
-    if (f.name && f.name_len) {
-        size_t n = f.name_len < sizeof name - 1 ? f.name_len : sizeof name - 1;
-        memcpy(name, f.name, n);
-        name[n] = 0;
-        trim(name);
-    }
     bool ffe0 = false;
-    for (int i = 0; i < f.num_uuids16; i++)
-        if (ble_uuid_u16(&f.uuids16[i].u) == SVC_UUID) ffe0 = true;
+    for (int i = 0; i + 1 < len;) {
+        int flen = data[i];
+        if (flen == 0) break;
+        int type = data[i + 1];
+        const uint8_t *v = data + i + 2;
+        int vlen = flen - 1;
+        if (i + 1 + flen > len) vlen = len - i - 2;
+        if (vlen < 0) break;
+        if ((type == 0x08 || type == 0x09) && vlen > 0) {
+            size_t n = (size_t)vlen < sizeof name - 1 ? (size_t)vlen : sizeof name - 1;
+            memcpy(name, v, n);
+            name[n] = 0;
+            trim(name);
+        } else if (type == 0x02 || type == 0x03) {
+            for (int k = 0; k + 1 < vlen; k += 2)
+                if ((v[k] | (v[k + 1] << 8)) == SVC_UUID) ffe0 = true;
+        }
+        i += 1 + flen;
+    }
 
     xSemaphoreTake(s_lock, portMAX_DELAY);
     candidate_t *c = NULL;
     for (int i = 0; i < s_ncands; i++)
         if (ble_addr_cmp(&s_cands[i].addr, addr) == 0) c = &s_cands[i];
-    if (!c && s_ncands < MAX_CANDIDATES) {
+    // Only Drifts get a slot: a home's phones, earbuds and other gadgets would fill the list in a second and
+    // crowd the table out. Its name may come only in the scan response, which carries the same address.
+    bool drift = ffe0 || strncmp(name, "KS", 2) == 0;
+    if (!c) s_heard++;
+    if (!c && drift && s_ncands < MAX_CANDIDATES) {
         c = &s_cands[s_ncands++];
         memset(c, 0, sizeof *c);
         c->addr = *addr;
@@ -219,8 +241,9 @@ static void disc_complete(void) {
             s_target_set = true;
             s_next_attempt_us = 0;
         } else {
-            relay_log(g_cfg.table_name[0] ? "table %s not found; trying again in %lu s" : "no Drift table found%s; trying again in %lu s",
-                      g_cfg.table_name, (unsigned long)(s_backoff_ms / 1000));
+            relay_log(g_cfg.table_name[0] ? "table %s not found (%d adverts from other devices, %d scan responses); trying again in %lu s"
+                                          : "no Drift table found%s (%d adverts from other devices, %d scan responses); trying again in %lu s",
+                      g_cfg.table_name, s_heard, s_scan_rsps, (unsigned long)(s_backoff_ms / 1000));
             s_next_attempt_us = now_us() + (int64_t)s_backoff_ms * 1000;
             s_backoff_ms = s_backoff_ms * 2 > BACKOFF_MAX_MS ? BACKOFF_MAX_MS : s_backoff_ms * 2;
         }
@@ -231,6 +254,7 @@ static void disc_complete(void) {
 static int disc_event(struct ble_gap_event *ev, void *arg) {
     switch (ev->type) {
     case BLE_GAP_EVENT_DISC:
+        if (ev->disc.event_type == BLE_HCI_ADV_RPT_EVTYPE_SCAN_RSP) s_scan_rsps++;
         add_report(&ev->disc.addr, ev->disc.rssi, ev->disc.data, ev->disc.length_data);
         break;
 #if MYNEWT_VAL(BLE_EXT_ADV)
@@ -252,6 +276,8 @@ static int start_disc(void) {
     struct ble_gap_disc_params p = {.itvl = 160, .window = 48, .filter_policy = 0, .limited = 0, .passive = 0, .filter_duplicates = 0};
     xSemaphoreTake(s_lock, portMAX_DELAY);
     s_ncands = 0;
+    s_heard = 0;
+    s_scan_rsps = 0;
     xSemaphoreGive(s_lock);
     int rc = ble_gap_disc(s_own_addr_type, SCAN_MS, &p, disc_event, NULL);
     if (rc == 0) s_disc_active = true;
@@ -360,6 +386,7 @@ static void table_packet(uint8_t cmd, bool ack, int action) {
         g_st.handshakes++;
         if (g_st.host_connected && !g_st.gate_open) {
             g_st.gate_open = true;
+            s_last_write_us = now_us();   // give the host a full second to answer before any keepalive
             relay_log("table asked for a handshake; passing the host's writes on");
             net_status_changed();
         }
@@ -400,6 +427,8 @@ static int gap_event(struct ble_gap_event *ev, void *arg) {
         if (ev->connect.status == 0) {
             s_conn = ev->connect.conn_handle;
             s_phase = PH_DISCOVERING;
+            struct ble_gap_conn_desc d;
+            if (ble_gap_conn_find(s_conn, &d) == 0) relay_log("connected; interval %u ms", d.conn_itvl * 5 / 4);
             s_svc_start = s_svc_end = s_write_handle = s_notify_handle = s_cccd_handle = 0;
             s_write_props = 0;
             if (ble_gattc_exchange_mtu(s_conn, mtu_done, NULL) != 0) mtu_done(s_conn, &(struct ble_gatt_error){.status = 1}, 23, NULL);
@@ -443,6 +472,26 @@ static int gap_event(struct ble_gap_event *ev, void *arg) {
             }
         }
         break;
+    case BLE_GAP_EVENT_CONN_UPDATE_REQ:
+    case BLE_GAP_EVENT_L2CAP_UPDATE_REQ: {
+        // The table may ask for a faster connection interval. Bluetooth then takes the shared radio so often
+        // that Wi-Fi drops packets (seen: 7-10% ping loss while linked, none while released), so keep it at
+        // 30 ms or slower. The table's traffic is a few small packets a second, which this carries easily.
+        const struct ble_gap_upd_params *peer = ev->conn_update_req.peer_params;
+        struct ble_gap_upd_params *self = ev->conn_update_req.self_params;
+        *self = *peer;
+        if (self->itvl_min < MIN_CONN_ITVL) self->itvl_min = MIN_CONN_ITVL;
+        if (self->itvl_max < self->itvl_min) self->itvl_max = self->itvl_min;
+        relay_log("table asked for a %u-%u ms connection interval; using %u-%u ms", peer->itvl_min * 5 / 4,
+                  peer->itvl_max * 5 / 4, self->itvl_min * 5 / 4, self->itvl_max * 5 / 4);
+        return 0;
+    }
+    case BLE_GAP_EVENT_CONN_UPDATE: {
+        struct ble_gap_conn_desc d;
+        if (ev->conn_update.status == 0 && ble_gap_conn_find(ev->conn_update.conn_handle, &d) == 0)
+            relay_log("connection interval now %u ms", d.conn_itvl * 5 / 4);
+        return 0;
+    }
     case BLE_GAP_EVENT_MTU:
         g_st.mtu = ev->mtu.value;
         break;
@@ -507,14 +556,24 @@ static void write_packet(const uint8_t *p, size_t n) {
         off += chunk;
     }
     g_st.writes++;
+    s_last_write_us = now_us();
 }
 
 static void writer_task(void *arg) {
     static uint8_t pkt[260];
+    static const uint8_t confirm[] = {0x7B, 0x04, 0xD0, 0x4F};
     int64_t last_page = 0;
     for (;;) {
-        size_t n = xMessageBufferReceive(s_writes, pkt, sizeof pkt, portMAX_DELAY);
-        if (!n) continue;
+        size_t n = xMessageBufferReceive(s_writes, pkt, sizeof pkt, pdMS_TO_TICKS(200));
+        if (!n) {
+            if (s_phase == PH_LINKED && g_st.gate_open && g_st.host_connected && s_last_write_us &&
+                now_us() - s_last_write_us >= KEEPALIVE_MS * 1000LL) {
+                write_packet(confirm, sizeof confirm);
+                s_last_write_us = now_us();   // even if the write failed: try again in a second, not every 200 ms
+                g_st.keepalives++;
+            }
+            continue;
+        }
         if (s_phase != PH_LINKED || !g_st.gate_open) { g_st.dropped_gate++; continue; }
         bool page = n >= 4 && pkt[0] == 0x7B && (pkt[2] & 0x7F) == 0x53;
         if (page) {

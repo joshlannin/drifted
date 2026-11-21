@@ -72,7 +72,7 @@ typedef struct {
     uint8_t table_addr_type;
     volatile bool table_known;
     // counters
-    volatile uint32_t notify_bytes, writes, dropped_gate, dropped_full, paced, handshakes, max_page_gap_ms;
+    volatile uint32_t notify_bytes, writes, dropped_gate, dropped_full, paced, handshakes, max_page_gap_ms, keepalives;
 } relay_state_t;
 
 extern relay_state_t g_st;

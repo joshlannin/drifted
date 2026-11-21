@@ -95,16 +95,25 @@ back. Hold it for 3 s to forget the table and take the strongest one in range.
 
 - **One host at a time.** A new connection must send the token within 5 s; only then does it replace the
   current host. Wrong tokens are refused (and slowed down).
-- **It never keeps the table's session alive by itself.** The table drops its session after about 2 s without
-  hearing from a host. When Drifted goes away, the table carries on as it does with no app connected (it keeps
-  drawing), and the relay just stays linked so Drifted is back within seconds.
+- **It keeps the session alive only for a connected host.** The table drops its session after about 2 s without
+  hearing from a host, and Wi-Fi on a busy 2.4 GHz band (shared with the relay's own Bluetooth) can hold
+  packets back for that long. So while a host is connected and the gate is open, if the host has written nothing
+  for 1 s the relay sends the table a ConfirmData (`7B 04 D0 4F`), the same reply a host sends to every message,
+  and counts it in `stats.keepalives`. With no host connected it sends nothing: the table carries on as it does
+  with no app connected (it keeps drawing), and the relay just stays linked so Drifted is back within seconds.
 - **The handshake gate.** When Drifted connects, the relay holds its writes back until the table next asks for a
   handshake (0x50/1). The table asks again after each session reset, so Drifted always starts with a full
   handshake and init dump, as over its own Bluetooth. If the table hasn't asked within 8 s, the relay reconnects
   Bluetooth, which always starts a fresh session.
 - **Page pacing.** Wi-Fi can deliver several pattern pages at once, and pages sent back to back make the table
   drop its session (docs/failure-modes.md). The relay keeps pages (0x53) at least 80 ms apart.
-- Everything else passes through untouched, in order. The relay originates no table commands. (It doesn't filter
+- **Connection interval.** The relay asks for 30–50 ms and refuses anything faster than 30 ms if the table asks
+  (it logs both), so Bluetooth leaves Wi-Fi room on the shared radio. The ST-400 settles at 50 ms.
+- **Finding the table.** The table names itself (`KS…`) only in its scan response and advertises no service
+  UUIDs. The relay keeps a candidate slot only for adverts that look like a Drift (a `KS` name or service
+  `FFE0`), so a room full of other Bluetooth devices can't crowd it out, and reads advert data leniently.
+- Everything else passes through untouched, in order. Apart from those keepalives the relay originates
+  nothing. (It doesn't filter
   either: the firmware-update and reset commands are as off-limits through it as anywhere.)
 - **Releasing the table.** The table takes one Bluetooth connection, so while the relay holds it the phone app
   can't connect. Drifted's **Disconnect** (or `POST /disconnect`, or the MCP `connection` tool) tells the relay to
@@ -153,6 +162,7 @@ Wi-Fi and token settings work only over USB.
 | blue, but Drifted says it can't reach the relay | Same network? `GET /relay` shows the error. Try `host` with the IP address instead of `name`; allow Drifted's local network permission (System Settings → Privacy & Security → Local Network) |
 | `wrong token` in Drifted's log | The token in `relay.json` differs from the relay's: re-run `setup.py --token <the one in Drifted>` or PUT the right one |
 | link drops now and then | `GET /status` `link.rssi` below −85: move the relay closer to the table. `wifiRssi` below −80: closer to the router |
+| Drifted keeps going back to "handshaking" | `GET /relay` `stats.handshakeRequests` climbing means the table is resetting its session: Wi-Fi stalls longer than the keepalive covers. `keepalives` counts the stalls it did cover. Move the relay or router, or move the router off a crowded 2.4 GHz channel |
 | uploads fail with "upload failed" | `GET /relay` `status.stats.maxPageGapMs` (the table gives up after 5 s) and `pagesPaced`. Wi-Fi trouble shows up as long gaps |
 
 ## Relay protocol
@@ -185,7 +195,7 @@ Unknown types are ignored both ways. STATUS:
  "rssi":-58,"mtu":247,"maxWrite":244,"gate":"open","host":true,"wifiRssi":-50,"ip":"192.168.1.40",
  "name":"drifted-relay-1a2b3c","uptime":3600,"firmware":"0.1.0","heap":180000,"ota":false,
  "stats":{"notifyBytes":0,"writes":0,"droppedBeforeHandshake":0,"droppedFull":0,"pagesPaced":0,
-          "handshakeRequests":0,"maxPageGapMs":0}}
+          "handshakeRequests":0,"maxPageGapMs":0,"keepalives":0}}
 ```
 
 `link` is `off` (Bluetooth starting), `released`, `idle` (hold off, no host), `waiting` (backing off before the

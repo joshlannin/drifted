@@ -135,14 +135,14 @@ int net_status_json(char *out, size_t outlen) {
                     "\"gate\":\"%s\",\"host\":%s,\"wifiRssi\":%s,\"ip\":\"%s\",\"name\":\"%s\",\"uptime\":%lld,"
                     "\"firmware\":\"%s\",\"heap\":%u,\"ota\":%s,\"stats\":{\"notifyBytes\":%lu,\"writes\":%lu,"
                     "\"droppedBeforeHandshake\":%lu,\"droppedFull\":%lu,\"pagesPaced\":%lu,\"handshakeRequests\":%lu,"
-                    "\"maxPageGapMs\":%lu}}",
+                    "\"maxPageGapMs\":%lu,\"keepalives\":%lu}}",
                     link_name(g_st.link), g_st.released ? "true" : "false", g_cfg.hold ? "true" : "false", table, rssi,
                     mtu, mtu > 3 ? mtu - 3 : 0, g_st.gate_open ? "open" : "waiting", g_st.host_connected ? "true" : "false",
                     wifi, g_st.ip, g_st.name, (long long)(now_us() / 1000000), RELAY_FIRMWARE_VERSION,
                     (unsigned)heap_caps_get_free_size(MALLOC_CAP_DEFAULT), g_st.ota_running ? "true" : "false",
                     (unsigned long)g_st.notify_bytes, (unsigned long)g_st.writes, (unsigned long)g_st.dropped_gate,
                     (unsigned long)g_st.dropped_full, (unsigned long)g_st.paced, (unsigned long)g_st.handshakes,
-                    (unsigned long)g_st.max_page_gap_ms);
+                    (unsigned long)g_st.max_page_gap_ms, (unsigned long)g_st.keepalives);
 }
 
 static SemaphoreHandle_t s_result_lock;
