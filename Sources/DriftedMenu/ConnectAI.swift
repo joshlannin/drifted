@@ -32,7 +32,7 @@ enum ConnectAI {
 
         If you can add MCP servers to your own configuration, check with me, then add it. If you can't, tell me
         exactly where to paste it and what to restart. Once the tools are loaded, call get_status (connection
-        should be "ready").
+        should be "ready", or "standby" with a relay that links on demand).
 
         Before drawing anything, read the drawing guide:
         \(repo)/blob/main/docs/drawing-guide.md
@@ -50,7 +50,7 @@ enum ConnectAI {
         API description: \(repo)/blob/main/spec/openapi.yaml
         Drawing guide:   \(repo)/blob/main/docs/drawing-guide.md
 
-        Start with GET /status (connection should be "ready"). Preview with POST /patterns/preview before drawing
+        Start with GET /status (connection should be "ready", or "standby" with a relay that links on demand). Preview with POST /patterns/preview before drawing
         with POST /show, and begin with a small test: a circle of radius 0.3.
         """
     }

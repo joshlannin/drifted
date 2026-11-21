@@ -6,6 +6,10 @@
 //   fresh handshake (and its init dump: stored pattern ids, state), as it would over its own Bluetooth.
 // - Page pacing: Wi-Fi can deliver several pattern pages at once; pages sent 1 ms apart make the table drop the
 //   session (docs/failure-modes.md), so pages (0x53) go to the table at least 80 ms apart.
+// And one about a table that is stuck: see table_packet().
+//
+// A job (job.h) is different: while one runs the link is the job's, the host's writes are dropped, and the job
+// answers the table itself.
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -35,6 +39,7 @@ static const char *TAG = "ble";
 #define KEEPALIVE_MS 1000
 #define MIN_CONN_ITVL 24   // 1.25 ms units: 30 ms
 #define GATE_TIMEOUT_MS 8000
+#define UNSTICK_AFTER_MS 3000
 #define CONNECT_TIMEOUT_MS 10000
 #define SCAN_MS 5000
 #define BACKOFF_MIN_MS 1000
@@ -65,6 +70,11 @@ static SemaphoreHandle_t s_lock;
 
 static volatile bool s_disc_active, s_report_host, s_report_console;
 static int64_t s_next_attempt_us, s_linked_at_us, s_gate_closed_at_us, s_host_left_at_us, s_last_rssi_us;
+static volatile int64_t s_last_unstick_us;
+static volatile bool s_unstick;          // the writer task should answer the table with ConfirmData (table_packet)
+static volatile bool s_job_active;       // a job has the table (ble_job_link_up … ble_job_link_down(true))
+static volatile unsigned s_link_gen;     // counts links that came up
+static MessageBufferHandle_t s_job_rx;   // the table's notifications, for the job
 static uint32_t s_backoff_ms = BACKOFF_MIN_MS;
 static int s_failures;
 static volatile int64_t s_last_write_us;   // last packet written to the table (host's or a keepalive)
@@ -310,6 +320,8 @@ static void linked(uint16_t conn) {
     s_backoff_ms = BACKOFF_MIN_MS;
     s_failures = 0;
     s_rx_len = 0;
+    s_last_unstick_us = 0;
+    s_link_gen++;
     g_st.gate_open = false;
     g_st.mtu = ble_att_mtu(conn);
     // Remember the table we linked to (the strongest, or the one chosen over the network).
@@ -390,6 +402,21 @@ static void table_packet(uint8_t cmd, bool ack, int action) {
             relay_log("table asked for a handshake; passing the host's writes on");
             net_status_changed();
         }
+        return;
+    }
+    // A table left half-way through an earlier init dump (a handshake cut short) repeats the message it wants
+    // answered, on every new link, and never asks for a handshake again. The gate would keep the host's answers
+    // back for ever. So when a host has waited a few seconds and the table sends list messages instead of a
+    // handshake request, answer them here. The dump runs to its end, the table hears nothing more, resets its
+    // session after 2 s and asks for a handshake as usual. (Running state and alarms are left alone: answering
+    // those would keep the old session alive.)
+    if (g_st.host_connected && !g_st.gate_open && !ack && cmd >= 0x30 && cmd <= 0x38 && cmd != 0x35 && cmd != 0x37) {
+        int64_t since = s_gate_closed_at_us > s_linked_at_us ? s_gate_closed_at_us : s_linked_at_us;
+        if (s_last_unstick_us || now_us() - since > UNSTICK_AFTER_MS * 1000LL) {
+            if (!s_last_unstick_us) relay_log("the table is half-way through an old handshake (repeating 0x%02x/%d); answering it so it can start over", cmd, action);
+            s_last_unstick_us = now_us();
+            s_unstick = true;   // the writer task sends it (this is the Bluetooth host's task)
+        }
     }
 }
 
@@ -466,9 +493,13 @@ static int gap_event(struct ble_gap_event *ev, void *arg) {
             static uint8_t buf[600];
             uint16_t n = 0;
             if (ble_hs_mbuf_to_flat(ev->notify_rx.om, buf, sizeof buf, &n) == 0 && n) {
-                watch_table_bytes(buf, n);   // first, so the gate is open before the host can answer
                 g_st.notify_bytes += n;
-                net_send(MSG_TABLE_DATA, buf, n);
+                if (s_job_active) {
+                    if (xMessageBufferSend(s_job_rx, buf, n, 0) != n) g_st.dropped_full++;
+                } else {
+                    watch_table_bytes(buf, n);   // first, so the gate is open before the host can answer
+                    net_send(MSG_TABLE_DATA, buf, n);
+                }
             }
         }
         break;
@@ -564,7 +595,19 @@ static void writer_task(void *arg) {
     static const uint8_t confirm[] = {0x7B, 0x04, 0xD0, 0x4F};
     int64_t last_page = 0;
     for (;;) {
-        size_t n = xMessageBufferReceive(s_writes, pkt, sizeof pkt, pdMS_TO_TICKS(200));
+        size_t n = xMessageBufferReceive(s_writes, pkt, sizeof pkt, pdMS_TO_TICKS(100));
+        if (s_job_active) {   // the job writes for itself (ble_job_write)
+            if (n) g_st.dropped_gate++;
+            s_unstick = false;
+            continue;
+        }
+        if (s_unstick) {
+            s_unstick = false;
+            if (s_phase == PH_LINKED && !g_st.gate_open) {
+                write_packet(confirm, sizeof confirm);
+                g_st.unstuck++;
+            }
+        }
         if (!n) {
             if (s_phase == PH_LINKED && g_st.gate_open && g_st.host_connected && s_last_write_us &&
                 now_us() - s_last_write_us >= KEEPALIVE_MS * 1000LL) {
@@ -596,6 +639,7 @@ void ble_write_enqueue(const uint8_t *data, size_t len) {
 // ---- Control ----
 
 static bool want_link(void) {
+    if (s_job_active) return true;
     if (g_st.released) return false;
     if (g_cfg.hold || g_st.host_connected) return true;
     return s_host_left_at_us && now_us() - s_host_left_at_us < NO_HOST_RELEASE_MS * 1000LL;
@@ -610,7 +654,7 @@ static void tick(void) {
 
     switch (s_phase) {
     case PH_IDLE:
-        set_link(g_st.released ? LINK_RELEASED : !want ? LINK_IDLE : LINK_WAITING);
+        set_link(want ? LINK_WAITING : g_st.released ? LINK_RELEASED : LINK_IDLE);
         if (!want || t < s_next_attempt_us || s_disc_active) break;
         if (s_target_set) {
             connect_to(&s_target);
@@ -648,8 +692,9 @@ static void tick(void) {
         }
         // A host is waiting for a handshake the table hasn't asked for. Over Bluetooth a fresh connection
         // always starts with one, so reconnect.
-        if (g_st.host_connected && !g_st.gate_open) {
+        if (g_st.host_connected && !g_st.gate_open && !s_job_active) {
             int64_t since = s_gate_closed_at_us > s_linked_at_us ? s_gate_closed_at_us : s_linked_at_us;
+            if (s_last_unstick_us > since) since = s_last_unstick_us;
             if (t - since > GATE_TIMEOUT_MS * 1000LL) {
                 relay_log("no handshake request from the table for %d s; reconnecting so it starts a fresh session", GATE_TIMEOUT_MS / 1000);
                 s_gate_closed_at_us = t;
@@ -757,6 +802,57 @@ void ble_forget(void) {
 
 void ble_settings_changed(void) { kick(); }
 
+// ---- Jobs ----
+
+bool ble_job_link_up(int timeout_ms) {
+    static uint8_t scrap[600];
+    while (xMessageBufferReceive(s_job_rx, scrap, sizeof scrap, 0)) {}
+    unsigned gen = s_link_gen;
+    s_job_active = true;
+    g_st.gate_open = false;
+    s_backoff_ms = BACKOFF_MIN_MS;
+    s_next_attempt_us = 0;
+    // A link that's already up carries someone else's session (or none): the job starts on a fresh one, where
+    // the table asks for a handshake.
+    if (s_phase == PH_LINKED) s_restart_link = true;
+    net_status_changed();
+    kick();
+    int64_t deadline = now_us() + timeout_ms * 1000LL;
+    while (now_us() < deadline) {
+        if (s_phase == PH_LINKED && !s_restart_link && s_link_gen != gen) return true;
+        vTaskDelay(pdMS_TO_TICKS(20));
+    }
+    return false;
+}
+
+void ble_job_link_down(bool done) {
+    if (done) {
+        // Back to what the relay does without a job: released stays released; a host that holds the table gets
+        // a fresh handshake (the gate is closed, and the table resets its session once the job stops answering).
+        s_job_active = false;
+        s_gate_closed_at_us = now_us();
+        net_status_changed();
+        kick();
+        return;
+    }
+    if (s_phase != PH_LINKED) return;
+    s_restart_link = true;
+    kick();
+    for (int i = 0; i < 150 && s_phase == PH_LINKED; i++) vTaskDelay(pdMS_TO_TICKS(20));
+}
+
+bool ble_job_write(const uint8_t *packet, size_t len) {
+    if (s_phase != PH_LINKED) return false;
+    write_packet(packet, len);
+    return s_phase == PH_LINKED;
+}
+
+int ble_job_recv(uint8_t *buf, size_t max, int timeout_ms) {
+    size_t n = xMessageBufferReceive(s_job_rx, buf, max, pdMS_TO_TICKS(timeout_ms));
+    if (n) return (int)n;
+    return s_phase == PH_LINKED ? 0 : -1;
+}
+
 // ---- Start ----
 
 static void on_sync(void) {
@@ -785,6 +881,7 @@ void ble_start(void) {
     s_lock = xSemaphoreCreateMutex();
     s_write_done = xSemaphoreCreateBinary();
     s_writes = xMessageBufferCreate(4096);
+    s_job_rx = xMessageBufferCreate(6144);
     if (nimble_port_init() != ESP_OK) {
         ESP_LOGE(TAG, "NimBLE init failed");
         return;

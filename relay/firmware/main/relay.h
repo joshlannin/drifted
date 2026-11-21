@@ -7,8 +7,8 @@
 #include <stddef.h>
 #include <stdint.h>
 
-#define RELAY_FIRMWARE_VERSION "0.1.0"
-#define RELAY_PROTO 1
+#define RELAY_FIRMWARE_VERSION "0.2.1"
+#define RELAY_PROTO 2   // 2: jobs (job.h)
 #define RELAY_PORT 8766
 
 // M5Stack NanoC6
@@ -28,6 +28,7 @@ enum {
     MSG_COMMAND = 0x30,      // host → relay: command line
     MSG_RESULT = 0x31,       // relay → host: JSON
     MSG_LOG = 0x40,          // relay → host: log line
+    // 0x50-0x5A: jobs (job.h)
 };
 #define MAX_PAYLOAD 4096
 #define HELLO_FLAG_OBSERVE 0x01
@@ -73,6 +74,7 @@ typedef struct {
     volatile bool table_known;
     // counters
     volatile uint32_t notify_bytes, writes, dropped_gate, dropped_full, paced, handshakes, max_page_gap_ms, keepalives;
+    volatile uint32_t unstuck, wifi_drops, wifi_last_reason, host_sessions, send_fails;
 } relay_state_t;
 
 extern relay_state_t g_st;
@@ -93,6 +95,11 @@ void ble_forget(void);
 void ble_set_released(bool released);
 void ble_settings_changed(void);
 int ble_scan_json(char *out, size_t outlen);
+// For a job (job_glue.c): the table link is the job's from link_up until link_down(true).
+bool ble_job_link_up(int timeout_ms);
+void ble_job_link_down(bool done);
+bool ble_job_write(const uint8_t *packet, size_t len);
+int ble_job_recv(uint8_t *buf, size_t max, int timeout_ms);
 
 // ---- Network (net.c) ----
 void net_start(void);
@@ -105,6 +112,10 @@ void net_result(const char *command, bool ok, const char *message, const char *e
 typedef enum { CMD_OK, CMD_ERROR, CMD_PENDING } cmd_result_t;
 cmd_result_t relay_command(const char *line, bool from_network, char *msg, size_t msglen);
 void console_start(void);
+
+// ---- Jobs (job.c is the engine; job_glue.c gives it Bluetooth, flash and the network) ----
+void jobs_start(void);
+void jobs_frame(uint8_t type, const uint8_t *payload, size_t len);   // a MSG_JOB_* message from the host
 
 // ---- LED and button (led.c) ----
 void led_start(void);

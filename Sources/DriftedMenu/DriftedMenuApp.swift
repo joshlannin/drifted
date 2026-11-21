@@ -29,7 +29,8 @@ final class Host: ObservableObject {
             Task { do { try await d.serve() } catch { self.error = "\(error)" } }
             d.table.$status.sink { [weak self] s in
                 guard let self else { return }
-                if s == .ready { self.notReadySince = nil } else if self.notReadySince == nil { self.notReadySince = Date() }
+                // Standing by (relay, link on demand) is where it should be, as much as ready is.
+                if s == .ready || s == .standby { self.notReadySince = nil } else if self.notReadySince == nil { self.notReadySince = Date() }
                 self.updateHint()
             }.store(in: &bag)
             Timer.publish(every: 5, on: .main, in: .common).autoconnect()
@@ -86,7 +87,7 @@ struct StatusMenu: View {
         }
         if let a = table.lastAlarm { Text("Latched: \(a.description)") }
         Divider()
-        if table.status == .ready {
+        if table.status == .ready || table.status == .standby {
             Button("Disconnect (let the HoMedics app connect)") { host.setConnected(false) }
         } else if !host.wantConnected {
             Button("Connect") { host.setConnected(true) }
@@ -116,6 +117,7 @@ struct StatusMenu: View {
     var connectionLine: String {
         switch table.status {
         case .ready: return "Connected to \(table.connectedName ?? "table")" + (table.viaRelay ? " through the relay" : "")
+        case .standby: return "Relay standing by for \(table.connectedName ?? "the table") (it connects when there's something to send)"
         case .connecting where table.viaRelay: return table.relayConnected ? "Relay is looking for the table…" : "Connecting to the relay…"
         case .disconnected(let why): return "Disconnected" + (why.map { ": \($0)" } ?? "")
         case .starting: return "Starting… (allow Bluetooth if macOS asks)"

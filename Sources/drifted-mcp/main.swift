@@ -48,7 +48,7 @@ func schema(_ props: [String: Any], required: [String] = []) -> [String: Any] {
 }
 
 let tools: [[String: Any]] = [
-    ["name": "get_status", "description": "Connection, what the table is drawing, progress (0-1), light and mode settings, and any latched table alarms (fatal alarms stay listed until the table reboots).",
+    ["name": "get_status", "description": "Connection, what the table is drawing, progress (0-1), light and mode settings, and any latched table alarms (fatal alarms stay listed until the table reboots). connection \"standby\" (a relay linking on demand) is fine: the relay takes the table when you send something, and the state shown is as of stateAt.",
      "inputSchema": schema([:])],
     ["name": "list_patterns", "description": "Pattern ids stored on the table, with names for ones drifted-host manages.", "inputSchema": schema([:])],
     ["name": "validate_pattern", "description": "Digital twin, no table needed: check a drawing without sending it. Returns issues (errors block sending; 'fixed' were repaired) and stats (points, length, estimated seconds to draw).",
@@ -108,15 +108,20 @@ let tools: [[String: Any]] = [
      "inputSchema": schema(["on": ["type": "boolean"]])],
     ["name": "connection", "description": "connect or disconnect drifted-host from the table (disconnect lets the official app connect).",
      "inputSchema": schema(["action": ["type": "string", "enum": ["connect", "disconnect"]]], required: ["action"])],
-    ["name": "relay", "description": "A Drifted relay (relay/README.md) is a small Wi-Fi board next to the table that holds its Bluetooth link, for a table out of this Mac's Bluetooth range. get (default): the relay setting and the relay's status (link, its signal to the table, Wi-Fi signal). set: save host/port (or Bonjour name) and token, and enabled=true to reach the table through it (false: this Mac's Bluetooth); the link restarts. discover: relays on the network. command: send the relay scan, select ADDRESS|NAME (which table it uses), forget, hold on|off, status, reboot or ota URL.",
+    ["name": "relay", "description": "A Drifted relay (relay/README.md) is a small Wi-Fi board next to the table that holds its Bluetooth link, for a table out of this Mac's Bluetooth range. get (default): the relay setting and the relay's status (link, its signal to the table, Wi-Fi signal). set: save host/port (or Bonjour name) and token, and enabled=true to reach the table through it (false: this Mac's Bluetooth); the link restarts. discover: relays on the network. command: send the relay scan, select ADDRESS|NAME (which table it uses), forget, hold on|off, status, reboot or ota URL. telemetry: how the link is holding up day by day, in any mode (time reachable, connections lost and why, how long the relay takes to reach the table, job and upload retries). set link=onDemand has the relay hold the table only while there's work and stand by in between (get_status then says standby; sending anything takes the table), because a relay's Wi-Fi stalls while it holds the table. With relay firmware 0.2 or later the relay then does each piece of work by itself (a job), so nothing depends on the network while it has the table; telemetry counts these as relayJobs.",
      "inputSchema": schema([
-        "action": ["type": "string", "enum": ["get", "set", "discover", "command"]],
+        "action": ["type": "string", "enum": ["get", "set", "discover", "command", "telemetry"]],
         "enabled": ["type": "boolean"],
         "host": ["type": ["string", "null"], "description": "Relay IP address or host name; null to find it by Bonjour"],
         "port": ["type": "integer", "description": "Default 8766"],
         "name": ["type": ["string", "null"], "description": "Bonjour name, e.g. drifted-relay-1a2b3c (see discover)"],
         "token": ["type": "string", "description": "The relay's token (relay/setup.py printed it)"],
         "command": ["type": "string", "description": "For action=command"],
+        "link": ["type": "string", "enum": ["always", "onDemand"], "description": "For action=set: hold the table all the time, or only while there's work"],
+        "checkInMinutes": ["type": "number", "description": "For action=set with link=onDemand: how often to link briefly for fresh status (default 30)"],
+        "lingerSeconds": ["type": "number", "description": "For action=set with link=onDemand: how long to keep the table after a job (default 60)"],
+        "jobs": ["type": "boolean", "description": "For action=set with link=onDemand: false stops handing work to the relay as jobs and drives the table live through it (default true)"],
+        "days": ["type": "integer", "description": "For action=telemetry: how many days (default 14)"],
      ])],
 ]
 
@@ -193,7 +198,8 @@ func run(_ name: String, _ a: [String: Any]) async throws -> [[String: Any]] {
         return try text(try await call("POST", "/\(action)"))
     case "relay":
         switch a["action"] as? String ?? "get" {
-        case "set": return try text(try await call("PUT", "/relay", json: a.filter { ["enabled", "host", "port", "name", "token"].contains($0.key) }))
+        case "set": return try text(try await call("PUT", "/relay", json: a.filter { ["enabled", "host", "port", "name", "token", "link", "checkInMinutes", "lingerSeconds", "jobs"].contains($0.key) }))
+        case "telemetry": return try text(try await call("GET", "/link?days=\(a["days"] as? Int ?? 14)&events=30"))
         case "discover": return try text(try await call("GET", "/relay/discover"))
         case "command": return try text(try await call("POST", "/relay/command", json: ["command": a["command"] as? String ?? ""]))
         default: return try text(try await call("GET", "/relay"))

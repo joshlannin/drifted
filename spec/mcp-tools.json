@@ -1,7 +1,7 @@
 {
   "tools": [
     {
-      "description": "Connection, what the table is drawing, progress (0-1), light and mode settings, and any latched table alarms (fatal alarms stay listed until the table reboots).",
+      "description": "Connection, what the table is drawing, progress (0-1), light and mode settings, and any latched table alarms (fatal alarms stay listed until the table reboots). connection \"standby\" (a relay linking on demand) is fine: the relay takes the table when you send something, and the state shown is as of stateAt.",
       "inputSchema": {
         "properties": {},
         "required": [],
@@ -591,7 +591,7 @@
       "name": "connection"
     },
     {
-      "description": "A Drifted relay (relay/README.md) is a small Wi-Fi board next to the table that holds its Bluetooth link, for a table out of this Mac's Bluetooth range. get (default): the relay setting and the relay's status (link, its signal to the table, Wi-Fi signal). set: save host/port (or Bonjour name) and token, and enabled=true to reach the table through it (false: this Mac's Bluetooth); the link restarts. discover: relays on the network. command: send the relay scan, select ADDRESS|NAME (which table it uses), forget, hold on|off, status, reboot or ota URL.",
+      "description": "A Drifted relay (relay/README.md) is a small Wi-Fi board next to the table that holds its Bluetooth link, for a table out of this Mac's Bluetooth range. get (default): the relay setting and the relay's status (link, its signal to the table, Wi-Fi signal). set: save host/port (or Bonjour name) and token, and enabled=true to reach the table through it (false: this Mac's Bluetooth); the link restarts. discover: relays on the network. command: send the relay scan, select ADDRESS|NAME (which table it uses), forget, hold on|off, status, reboot or ota URL. telemetry: how the link is holding up day by day, in any mode (time reachable, connections lost and why, how long the relay takes to reach the table, job and upload retries). set link=onDemand has the relay hold the table only while there's work and stand by in between (get_status then says standby; sending anything takes the table), because a relay's Wi-Fi stalls while it holds the table. With relay firmware 0.2 or later the relay then does each piece of work by itself (a job), so nothing depends on the network while it has the table; telemetry counts these as relayJobs.",
       "inputSchema": {
         "properties": {
           "action": {
@@ -599,13 +599,22 @@
               "get",
               "set",
               "discover",
-              "command"
+              "command",
+              "telemetry"
             ],
             "type": "string"
+          },
+          "checkInMinutes": {
+            "description": "For action=set with link=onDemand: how often to link briefly for fresh status (default 30)",
+            "type": "number"
           },
           "command": {
             "description": "For action=command",
             "type": "string"
+          },
+          "days": {
+            "description": "For action=telemetry: how many days (default 14)",
+            "type": "integer"
           },
           "enabled": {
             "type": "boolean"
@@ -616,6 +625,22 @@
               "string",
               "null"
             ]
+          },
+          "jobs": {
+            "description": "For action=set with link=onDemand: false stops handing work to the relay as jobs and drives the table live through it (default true)",
+            "type": "boolean"
+          },
+          "lingerSeconds": {
+            "description": "For action=set with link=onDemand: how long to keep the table after a job (default 60)",
+            "type": "number"
+          },
+          "link": {
+            "description": "For action=set: hold the table all the time, or only while there's work",
+            "enum": [
+              "always",
+              "onDemand"
+            ],
+            "type": "string"
           },
           "name": {
             "description": "Bonjour name, e.g. drifted-relay-1a2b3c (see discover)",

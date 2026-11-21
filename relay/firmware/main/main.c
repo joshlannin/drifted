@@ -61,6 +61,7 @@ void app_main(void) {
 
     led_start();
     console_start();
+    jobs_start();
     net_start();
     ble_start();
 

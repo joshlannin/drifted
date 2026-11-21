@@ -451,7 +451,7 @@ extension Daemon {
     func syncSeasonLamp(now: Date = Date(), force: Bool = false, advance: Bool = false) {
         let season = schedule.enabled ? schedule.activeSeasons(on: now).first(where: { !$0.colors.isEmpty }) : nil
         guard season != nil || scheduleState.lampSeason != nil else { return }
-        guard switches.lamp, table.status == .ready, !liveRunning, let state = table.tableState else { return }
+        guard switches.lamp, tableUsable, !liveRunning, let state = table.tableState else { return }
         if let season {
             if scheduleState.lampSeason != season.name {
                 if scheduleState.lamp == nil {

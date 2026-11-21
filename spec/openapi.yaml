@@ -62,7 +62,7 @@ components:
 paths:
   /status:
     get:
-      summary: "Connection, current drawing and progress, settings, latched alarms, and link: {via: bluetooth} or {via: relay, relay, relayConnected, tableLink, rssi, wifiRssi, firmware} (rssi is then the relay's signal to the table)"
+      summary: "Connection (ready; or standby: a relay linking on demand is connected and takes the table when something is sent), current drawing and progress as of stateAt, settings, latched alarms, and link: {via: bluetooth, lastLinked} or {via: relay, relay, relayConnected, tableLink, rssi, wifiRssi, firmware, mode (always or onDemand), lastLinked, nextCheckIn, jobs (the relay does table work by itself), jobRunning} (rssi is then the relay's signal to the table)"
       responses: { "200": { description: Status } }
   /log:
     get:
@@ -94,7 +94,18 @@ paths:
                 port: { type: [integer, "null"], default: 8766 }
                 name: { type: [string, "null"], description: "Bonjour name, e.g. drifted-relay-1a2b3c" }
                 token: { type: string, minLength: 16, description: "The relay's token (relay/setup.py prints it)" }
+                link: { type: string, enum: [always, onDemand], default: always, description: "onDemand: the relay holds the table only during jobs, live sessions and check-ins, and stands by (connection \"standby\") in between, because its Wi-Fi stalls while it holds the table (relay/README.md, Linking on demand)" }
+                checkInMinutes: { type: [number, "null"], default: 30, description: "onDemand: how often to link briefly for fresh status" }
+                lingerSeconds: { type: [number, "null"], default: 60, description: "onDemand: how long to keep the table after a job" }
+                jobs: { type: [boolean, "null"], default: true, description: "onDemand, relay firmware 0.2 or later: hand each piece of table work to the relay, which does it without the network (relay/README.md, Jobs). false drives the table live through the relay" }
       responses: { "200": { description: Relay setting and status }, "400": { description: Invalid field } }
+  /link:
+    get:
+      summary: "How the link to the table is holding up, in any mode: {mode, phase (linked, standby, connecting, down, released), connection, lastLinked, stateAt, nextCheckIn, need, relay (its status), days: [{date, mode, seconds per phase, reachablePercent, linkedPercent, wakes {count, failed, averageSeconds, slowestSeconds, within, reasons}, drops {total, whileLinked, whileStandingBy, duringJobs, causes}, connectFailures, jobs {count, failed, retried, longestLinkWaitSeconds}, uploads {count, failed, retries, pagesResent, seconds}, relayJobs {count, failed, failedAt {link, handshake, step, relay}, reasons, averageSeconds, slowestSeconds, bluetoothLink {averageSeconds, slowestSeconds}, tableReady {averageSeconds, slowestSeconds}, extraLinks, stepsRestarted, secondsHoldingTable} (jobs the relay did by itself), relay {restarts, wifiRssi, tableRssi, wifiLost {count, reasons by 802.11 code}, sendsGivenUp, stuckTableAnswers}}] newest first, recent: [{at, kind, what, seconds, ok}]}. Kept for 120 days in link-telemetry.json"
+      parameters:
+        - { name: days, in: query, schema: { type: integer, default: 14 } }
+        - { name: events, in: query, schema: { type: integer, default: 50 } }
+      responses: { "200": { description: Link telemetry } }
   /relay/discover:
     get: { summary: "Relays advertising _drifted-relay._tcp on the local network (3 s Bonjour browse): {relays: [{name, firmware, proto}]}", responses: { "200": { description: Relays } } }
   /relay/command:

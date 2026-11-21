@@ -89,7 +89,7 @@ extension Daemon {
 
     /// Runs every few seconds: starts the next pattern once the table has been finished for a while.
     func playlistTick() {
-        guard playlist.active, playlist.pausedBy == nil, switches.power, !liveRunning, table.status == .ready,
+        guard playlist.active, playlist.pausedBy == nil, switches.power, !liveRunning, tableUsable,
               let since = playlistIdleSince, Date().timeIntervalSince(since) >= Self.playlistIdleSeconds,
               Date().timeIntervalSince(playlistLastStart) >= 30, !playlistJobPending else { return }
         playlistAdvance("the table finished")
@@ -255,6 +255,7 @@ extension Daemon {
             + (start ? ", starting with \(first)\(slots.name(of: first).map { " (\($0))" } ?? "")" : ""))
         if start { syncSeasonLamp(advance: true) }
         let job = enqueue("table playlist") { _ in
+            if self.viaRelayJob { return try await self.relayTablePlaylist(batch, first: first, start: start) }
             if start { try await self.wakeForDrawing() }
             do {
                 try await self.writeTablePlaylist(batch)

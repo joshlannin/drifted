@@ -16,6 +16,7 @@
 #include "freertos/semphr.h"
 #include "freertos/task.h"
 #include "lwip/sockets.h"
+#include "job.h"
 #include "mdns.h"
 #include "relay.h"
 
@@ -75,6 +76,7 @@ static void send_frame(uint8_t type, const void *payload, size_t len) {
     int fd = s_client;
     if (fd >= 0 && !send_frame_to(fd, type, payload, len)) {
         ESP_LOGW(TAG, "send to host failed; closing");
+        g_st.send_fails++;
         shutdown(fd, SHUT_RDWR);   // the server task sees the close and cleans up
     }
     xSemaphoreGive(s_client_lock);
@@ -82,7 +84,7 @@ static void send_frame(uint8_t type, const void *payload, size_t len) {
 
 static void tx_task(void *arg) {
     static uint8_t msg[MAX_PAYLOAD + 1];
-    static char status[1024];
+    static char status[1400];
     int64_t last_status = 0;
     for (;;) {
         size_t n = xMessageBufferReceive(s_tx, msg, sizeof msg, pdMS_TO_TICKS(200));
@@ -130,19 +132,28 @@ int net_status_json(char *out, size_t outlen) {
     int w;
     if (g_st.wifi_up && esp_wifi_sta_get_rssi(&w) == ESP_OK) snprintf(wifi, sizeof wifi, "%d", w);
     unsigned mtu = g_st.link == LINK_LINKED ? g_st.mtu : 0;
-    return snprintf(out, outlen,
-                    "{\"link\":\"%s\",\"released\":%s,\"hold\":%s,\"table\":%s,\"rssi\":%s,\"mtu\":%u,\"maxWrite\":%u,"
-                    "\"gate\":\"%s\",\"host\":%s,\"wifiRssi\":%s,\"ip\":\"%s\",\"name\":\"%s\",\"uptime\":%lld,"
-                    "\"firmware\":\"%s\",\"heap\":%u,\"ota\":%s,\"stats\":{\"notifyBytes\":%lu,\"writes\":%lu,"
-                    "\"droppedBeforeHandshake\":%lu,\"droppedFull\":%lu,\"pagesPaced\":%lu,\"handshakeRequests\":%lu,"
-                    "\"maxPageGapMs\":%lu,\"keepalives\":%lu}}",
-                    link_name(g_st.link), g_st.released ? "true" : "false", g_cfg.hold ? "true" : "false", table, rssi,
-                    mtu, mtu > 3 ? mtu - 3 : 0, g_st.gate_open ? "open" : "waiting", g_st.host_connected ? "true" : "false",
-                    wifi, g_st.ip, g_st.name, (long long)(now_us() / 1000000), RELAY_FIRMWARE_VERSION,
-                    (unsigned)heap_caps_get_free_size(MALLOC_CAP_DEFAULT), g_st.ota_running ? "true" : "false",
-                    (unsigned long)g_st.notify_bytes, (unsigned long)g_st.writes, (unsigned long)g_st.dropped_gate,
-                    (unsigned long)g_st.dropped_full, (unsigned long)g_st.paced, (unsigned long)g_st.handshakes,
-                    (unsigned long)g_st.max_page_gap_ms, (unsigned long)g_st.keepalives);
+    int n = snprintf(out, outlen,
+                     "{\"link\":\"%s\",\"released\":%s,\"hold\":%s,\"table\":%s,\"rssi\":%s,\"mtu\":%u,\"maxWrite\":%u,"
+                     "\"gate\":\"%s\",\"host\":%s,\"wifiRssi\":%s,\"ip\":\"%s\",\"name\":\"%s\",\"uptime\":%lld,"
+                     "\"firmware\":\"%s\",\"proto\":%d,\"heap\":%u,\"ota\":%s,\"stats\":{\"notifyBytes\":%lu,\"writes\":%lu,"
+                     "\"droppedBeforeHandshake\":%lu,\"droppedFull\":%lu,\"pagesPaced\":%lu,\"handshakeRequests\":%lu,"
+                     "\"maxPageGapMs\":%lu,\"keepalives\":%lu,\"unstuck\":%lu,\"wifiDrops\":%lu,\"wifiLastReason\":%lu,"
+                     "\"hostSessions\":%lu,\"sendFails\":%lu}",
+                     link_name(g_st.link), g_st.released ? "true" : "false", g_cfg.hold ? "true" : "false", table, rssi,
+                     mtu, mtu > 3 ? mtu - 3 : 0, g_st.gate_open ? "open" : "waiting", g_st.host_connected ? "true" : "false",
+                     wifi, g_st.ip, g_st.name, (long long)(now_us() / 1000000), RELAY_FIRMWARE_VERSION, RELAY_PROTO,
+                     (unsigned)heap_caps_get_free_size(MALLOC_CAP_DEFAULT), g_st.ota_running ? "true" : "false",
+                     (unsigned long)g_st.notify_bytes, (unsigned long)g_st.writes, (unsigned long)g_st.dropped_gate,
+                     (unsigned long)g_st.dropped_full, (unsigned long)g_st.paced, (unsigned long)g_st.handshakes,
+                     (unsigned long)g_st.max_page_gap_ms, (unsigned long)g_st.keepalives, (unsigned long)g_st.unstuck,
+                     (unsigned long)g_st.wifi_drops, (unsigned long)g_st.wifi_last_reason, (unsigned long)g_st.host_sessions,
+                     (unsigned long)g_st.send_fails);
+    if (n < 0 || n >= (int)outlen - 140) return n < (int)outlen ? n : (int)outlen - 1;   // (can't happen: the buffers are 1400)
+    // The current or last job, if there has been one: ,"job":{…}
+    char job[128];
+    if (job_status_json(job, sizeof job) > 0) n += snprintf(out + n, outlen - n, ",%s", job);
+    n += snprintf(out + n, outlen - n, "}");
+    return n;
 }
 
 static SemaphoreHandle_t s_result_lock;
@@ -228,7 +239,8 @@ static void handle_frame(uint8_t type, const uint8_t *p, size_t len) {
         break;
     }
     default:
-        break;   // HELLO again, or a type from a newer host: ignore
+        if (type >= MSG_JOB_BEGIN && type <= MSG_JOB_QUERY) jobs_frame(type, p, len);
+        break;   // otherwise HELLO again, or a type from a newer host: ignore
     }
 }
 
@@ -315,6 +327,7 @@ static void server_task(void *arg) {
                                               RELAY_PROTO, RELAY_FIRMWARE_VERSION, g_st.name);
                             send_small(s_client, MSG_WELCOME, welcome, wn);
                             g_st.host_connected = true;
+                            g_st.host_sessions++;
                             s_status_dirty = true;
                             xSemaphoreGive(s_client_lock);
                             clen = plen - 3 - len;
@@ -357,7 +370,11 @@ static void wifi_event(void *arg, esp_event_base_t base, int32_t id, void *data)
         if (g_cfg.wifi_ssid[0]) esp_wifi_connect();
     } else if (base == WIFI_EVENT && id == WIFI_EVENT_STA_DISCONNECTED) {
         wifi_event_sta_disconnected_t *d = data;
-        if (g_st.wifi_up) relay_log("Wi-Fi lost (reason %d)", d->reason);
+        if (g_st.wifi_up) {
+            g_st.wifi_drops++;
+            g_st.wifi_last_reason = d->reason;
+            relay_log("Wi-Fi lost (reason %d)", d->reason);
+        }
         else ESP_LOGW(TAG, "Wi-Fi connect to \"%s\" failed (reason %d); retrying in %lu s", g_cfg.wifi_ssid, d->reason,
                       (unsigned long)(s_wifi_backoff_ms / 1000));
         g_st.wifi_up = false;
@@ -407,12 +424,12 @@ void net_start(void) {
     if (mdns_init() == ESP_OK) {
         mdns_hostname_set(g_st.name);
         mdns_instance_name_set(g_st.name);
-        mdns_txt_item_t txt[] = {{"firmware", RELAY_FIRMWARE_VERSION}, {"proto", "1"}};
+        mdns_txt_item_t txt[] = {{"firmware", RELAY_FIRMWARE_VERSION}, {"proto", "2"}};
         mdns_service_add(g_st.name, "_drifted-relay", "_tcp", RELAY_PORT, txt, 2);
     } else {
         ESP_LOGW(TAG, "mDNS didn't start; find the relay by IP address");
     }
 
     xTaskCreate(tx_task, "net_tx", 4096, NULL, 6, NULL);
-    xTaskCreate(server_task, "net_server", 6144, NULL, 5, NULL);
+    xTaskCreate(server_task, "net_server", 8192, NULL, 5, NULL);   // room for a job's flash writes
 }

@@ -114,7 +114,7 @@ cmd_result_t relay_command(const char *line, bool net, char *msg, size_t msglen)
     if (strcmp(cmd, "version") == 0) { snprintf(msg, msglen, "drifted-relay %s", RELAY_FIRMWARE_VERSION); return CMD_OK; }
     if (strcmp(cmd, "status") == 0) {
         if (net) net_status_changed();
-        else { static char s[1024]; net_status_json(s, sizeof s); printf("%s\n", s); }
+        else { static char s[1400]; net_status_json(s, sizeof s); printf("%s\n", s); }
         return CMD_OK;
     }
     if (strcmp(cmd, "scan") == 0) { ble_request_scan(net, !net); return CMD_PENDING; }

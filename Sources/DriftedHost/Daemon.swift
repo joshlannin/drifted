@@ -28,12 +28,36 @@ public final class Daemon {
     public let token: String
     var slots: SlotStore
     private(set) var switches: Switches
-    private var wantConnected = true
+    private(set) var wantConnected = true
     private var sse: [ObjectIdentifier: SSEClient] = [:]
-    private var jobs: [Int: Job] = [:]
+    private(set) var jobs: [Int: Job] = [:]
     private var nextJob = 1
     private var jobChain: Task<Void, Never> = Task {}
-    private var live: LiveSession?
+    private(set) var live: LiveSession?
+    /// A live session is waiting for the table link (Link.swift keeps the link for it).
+    private(set) var liveStarting = false
+    /// relay.json, as last loaded or set.
+    var relaySettings: RelaySettings
+    // Link on demand (Link.swift): the relay holds the table only while there's work or a check-in.
+    var linkLingerUntil = Date.distantPast
+    var linkNextCheckIn = Date.distantPast
+    var linkLastLinked: Date?
+    var linkBusySince: Date?
+    var linkCheckInRunning = false
+    /// The power switch went on for a drawing, and the relay job carrying "power on" hasn't succeeded yet.
+    var relayOwesPowerOn = false
+    var lastStateAt: Date?
+    // How the link is holding up (LinkTelemetry.swift).
+    var telemetry: LinkTelemetry
+    var telemetryPhase = "down"
+    var telemetryPhaseSince = Date()
+    var telemetryStatus: DriftTable.Status = .starting
+    var telemetryDay = ""
+    var telemetryLastSave = Date()
+    var telemetryRelayUptime: Int?
+    /// The relay's own counts since it started (firmware 0.2), to see what each day added.
+    var telemetryRelayCounts: [String: Int] = [:]
+    var jobRunning = false
     private var reportedAlarms: Set<UInt16> = []
     private var lastStateKey = ""
     private var lastProgressEvent = Date.distantPast
@@ -52,7 +76,9 @@ public final class Daemon {
     public init(config: Config) throws {
         self.config = config
         try FileManager.default.createDirectory(at: config.stateDir, withIntermediateDirectories: true)
-        table = DriftTable(relay: RelaySettings.load(config.stateDir).endpoint)   // Bluetooth unless relay.json says otherwise
+        relaySettings = RelaySettings.load(config.stateDir)
+        table = DriftTable(relay: relaySettings.endpoint)   // Bluetooth unless relay.json says otherwise
+        telemetry = LinkTelemetry.load(config.stateDir.appendingPathComponent("link-telemetry.json"))
         token = try Self.loadToken(config.stateDir.appendingPathComponent("token"))
         slots = SlotStore(file: config.stateDir.appendingPathComponent("slots.json"))
         switches = Switches.load(config.stateDir.appendingPathComponent("switches.json"))
@@ -63,7 +89,10 @@ public final class Daemon {
             ? FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Logs/Drifted/drifted-host.log")
             : config.stateDir.appendingPathComponent("drifted-host.log")
         table.logPackets = false
-        table.logHandler = { [weak self] in self?.log("table: \($0)") }
+        table.logHandler = { [weak self] in
+            self?.log("table: \($0)")
+            self?.telemetryTableNote($0)
+        }
     }
 
     // MARK: Log
@@ -121,8 +150,10 @@ public final class Daemon {
         try await table.waitForPoweredOn()
         table.$status.sink { [weak self] s in
             self?.emit("connection", ["status": "\(s)"])
+            self?.linkStatusChanged(s)   // Link.swift
             if s == .ready { self?.reassertSwitches() }
         }.store(in: &bag)
+        table.$relayStatus.sink { [weak self] s in if let s { self?.telemetryRelay(s) } }.store(in: &bag)
         table.$tableState.sink { [weak self] s in if let s { self?.stateChanged(s) } }.store(in: &bag)
         table.$lastAlarm.sink { [weak self] a in if let a { self?.alarm(a) } }.store(in: &bag)
         Task { await supervise() }
@@ -131,20 +162,26 @@ public final class Daemon {
                 try? await Task.sleep(nanoseconds: 4_000_000_000)
                 self.playlistTick()
                 self.scheduleTick()
+                self.telemetryTick()
             }
         }
     }
 
-    /// Keeps the connection up unless a client asked us to let go.
+    /// Keeps the connection up unless a client asked us to let go. Through a relay set to link on demand,
+    /// "up" means the relay connection, and the table itself only while something needs it (Link.swift).
     private func supervise() async {
         while true {
             if wantConnected {
-                switch table.status {
-                case .ready, .connecting, .handshaking, .scanning: break
-                default: await connectOnce()
+                if linkOnDemand {
+                    await superviseOnDemand()
+                } else {
+                    switch table.status {
+                    case .ready, .connecting, .handshaking, .scanning: break
+                    default: await connectOnce()   // from standby too, after a switch back to always linked
+                    }
                 }
             }
-            try? await Task.sleep(nanoseconds: 3_000_000_000)
+            try? await Task.sleep(nanoseconds: linkOnDemand ? 500_000_000 : 3_000_000_000)
         }
     }
 
@@ -171,7 +208,7 @@ public final class Daemon {
     }
 
     /// Waits for supervise() to (re)connect. False if it hasn't within `timeout`, or a client released the table.
-    private func waitForConnection(timeout: TimeInterval) async -> Bool {
+    func waitForConnection(timeout: TimeInterval) async -> Bool {
         let deadline = Date().addingTimeInterval(timeout)
         while Date() < deadline {
             if table.status == .ready { return true }
@@ -199,6 +236,7 @@ public final class Daemon {
     }
 
     private func stateChanged(_ s: TableState) {
+        lastStateAt = Date()
         playlistObserve(s)
         if s.brightness > 0, switches.lamp, abs(switches.lampLevel - Double(s.brightness) / 100) > 0.005 {
             switches.lampLevel = Double(s.brightness) / 100
@@ -222,9 +260,10 @@ public final class Daemon {
     // MARK: Jobs
 
     /// Queues `work`; jobs run one at a time, in order. A job waits up to 45 s for the table if it's
-    /// reconnecting, and if the connection drops while it runs, it runs again once the table is back
-    /// (up to 3 times). That's safe for every job: a dropped connection throws before a packet is written,
-    /// and `show` finds a finished upload in its slot instead of uploading it again.
+    /// reconnecting (150 s when the relay first has to take the table: Link.swift), and if the connection
+    /// drops while it runs, it runs again once the table is back (up to 3 times). That's safe for every job:
+    /// a dropped connection throws before a packet is written, and `show` finds a finished upload in its
+    /// slot instead of uploading it again.
     func enqueue(_ kind: String, _ work: @escaping @MainActor (_ progress: @escaping (Double) -> Void) async throws -> [String: String]?) -> Job {
         let id = nextJob; nextJob += 1
         let job = Job(id: id, kind: kind)
@@ -235,21 +274,36 @@ public final class Daemon {
             await previous.value
             self.update(id) { $0.state = .running }
             var attempt = 1
+            let started = Date()
+            var linkWait = 0.0, failure: String?
             while true {
                 do {
-                    guard await self.waitForConnection(timeout: 45) else { throw DriftError.notConnected }
+                    let asked = Date()
+                    let connected = await self.waitForLink()
+                    linkWait = max(linkWait, Date().timeIntervalSince(asked))
+                    guard connected else { throw DriftError.notConnected }
+                    self.jobRunning = true
+                    defer { self.jobRunning = false }
                     let result = try await work { p in self.update(id) { $0.progress = p } }
                     self.update(id) { $0.state = .done; $0.progress = 1; $0.result = result }
                 } catch DriftError.notConnected where attempt < 3 && self.wantConnected {
                     attempt += 1
                     self.log("job \(id) (\(kind)): lost the table; running it again once it reconnects (attempt \(attempt) of 3)")
                     continue
+                } catch DriftError.relayJob(let why, retry: true) where attempt < 3 && self.wantConnected {
+                    // The relay never got to the table (or we never got to the relay). Give it a moment.
+                    attempt += 1
+                    self.log("job \(id) (\(kind)): \(why); trying again in 15 s (attempt \(attempt) of 3)")
+                    try? await Task.sleep(nanoseconds: 15_000_000_000)
+                    continue
                 } catch {
+                    failure = error.localizedDescription
                     self.log("job \(id) (\(kind)) failed: \(error.localizedDescription)")
                     self.update(id) { $0.state = .failed; $0.error = error.localizedDescription }
                 }
                 break
             }
+            self.telemetryJob(kind: kind, error: failure, attempts: attempt, linkWait: linkWait, seconds: Date().timeIntervalSince(started))
         }
         emit("job", jobJSON(job))
         return job
@@ -260,6 +314,20 @@ public final class Daemon {
         let before = (j.state, Int(j.progress * 10))
         change(&j); jobs[id] = j
         if before != (j.state, Int(j.progress * 10)) { emit("job", jobJSON(j)) }
+    }
+
+    /// What a job needs before it can run: through a relay that runs jobs (RelayJobs.swift) only the relay;
+    /// otherwise the table itself, ready.
+    private func waitForLink() async -> Bool {
+        let deadline = Date().addingTimeInterval(linkOnDemand ? 150 : 45)
+        while Date() < deadline {
+            if table.status == .ready { return true }
+            if !wantConnected { return false }
+            // Connected to a relay that runs jobs (its welcome said so): it takes the table itself.
+            if relayJobs, table.relayConnected { return true }
+            try? await Task.sleep(nanoseconds: 250_000_000)
+        }
+        return table.status == .ready
     }
 
     /// Waits for a job (quick commands answer with the finished job).
@@ -284,6 +352,9 @@ public final class Daemon {
         let hash = PatternValidator.contentHash(report.pattern)
         playlistHold(hold)
         return enqueue("show") { progress in
+            if self.viaRelayJob {
+                return try await self.relayShow(points: report.pattern.wirePoints, hash: hash, name: pattern.name, progress: progress)
+            }
             try await self.wakeForDrawing()
             let playing = self.table.tableState.flatMap { $0.status == 1 ? $0.patternId : nil }
             if let id = self.slots.slot(holding: hash), self.table.storedPatternIds.contains(id) {
@@ -307,6 +378,12 @@ public final class Daemon {
         guard report.ok else { throw HTTPError(400, report.issues.filter { $0.severity == .error }.map(\.message).joined(separator: "; ")) }
         let hash = PatternValidator.contentHash(report.pattern)
         return enqueue("save") { progress in
+            if self.viaRelayJob {
+                let id = self.slots.savedId(for: pattern.name, avoiding: self.table.storedPatternIds)
+                try await self.relayRun("save", [.init(.upload(points: report.pattern.wirePoints, ids: [id]))], progress: progress)
+                self.slots.save(id, name: pattern.name, hash: hash)
+                return ["id": "\(id)", "name": pattern.name]
+            }
             let id = try await self.upload(report.pattern.wirePoints,
                                            id: self.slots.savedId(for: pattern.name, avoiding: self.table.storedPatternIds),
                                            progress: progress)
@@ -322,9 +399,11 @@ public final class Daemon {
     private func upload(_ points: [WirePoint], id first: UInt16, progress: @escaping (Double) -> Void,
                         alternative: ((Set<UInt16>) -> UInt16)? = nil) async throws -> UInt16 {
         var id = first, tried: Set<UInt16> = [], attempt = 1
+        let started = Date()
         while true {
             do {
                 try await table.upload(points, id: id, progress: progress)
+                telemetryUpload(ok: true, tries: attempt, seconds: Date().timeIntervalSince(started), points: points.count)
                 return id
             } catch let error as DriftError where error.isRetryable && attempt < 3 {
                 tried.insert(id)
@@ -332,7 +411,13 @@ public final class Daemon {
                 attempt += 1
                 log("\(error.localizedDescription); retrying into pattern \(id) in 2 s (attempt \(attempt) of 3)")
                 try await Task.sleep(nanoseconds: 2_000_000_000)
-                guard table.status == .ready else { throw DriftError.notConnected }
+                guard table.status == .ready else {
+                    telemetryUpload(ok: false, tries: attempt, seconds: Date().timeIntervalSince(started), points: points.count)
+                    throw DriftError.notConnected
+                }
+            } catch {
+                telemetryUpload(ok: false, tries: attempt, seconds: Date().timeIntervalSince(started), points: points.count)
+                throw error
             }
         }
     }
@@ -342,7 +427,11 @@ public final class Daemon {
         guard table.storedPatternIds.contains(id) else { throw HTTPError(404, "the table doesn't have id \(id)") }
         guard table.tableState?.patternId != id else { throw HTTPError(409, "id \(id) is drawing; the table won't delete it") }
         return enqueue("delete") { _ in
-            try await self.table.send(Command.deletePatterns([id]))
+            if self.viaRelayJob {
+                try await self.relayRun("delete", [.init(.send(Command.deletePatterns([id])))])
+            } else {
+                try await self.table.send(Command.deletePatterns([id]))
+            }
             self.slots.forget(id)
             return ["id": "\(id)"]
         }
@@ -350,6 +439,10 @@ public final class Daemon {
 
     func command(_ kind: String, _ packets: [Packet]) -> Job {
         enqueue(kind) { _ in
+            if self.viaRelayJob {
+                try await self.relayRun(kind, packets.map { .init(.send($0)) })
+                return nil
+            }
             for p in packets { try await self.table.send(p) }
             return nil
         }
@@ -373,12 +466,18 @@ public final class Daemon {
             playlistAdvance("power on")
             return
         }
-        guard table.status == .ready else { return }   // "off" is sent when the table reconnects (reassertSwitches)
+        guard table.status == .ready else {
+            // Always linked: "off" is sent when the table reconnects (reassertSwitches). On demand nothing
+            // reconnects by itself, so this takes the table to send it.
+            if linkOnDemand, wantConnected { _ = command("power", [Command.power(on)]) }
+            return
+        }
         Task { try? await self.table.send(Command.power(on)) }
     }
 
     /// Records the power switch without sending anything (/settings sends its own packet).
     func powerSetBySettings(_ on: Bool) {
+        if !on { relayOwesPowerOn = false }
         guard switches.power != on else { return }
         switches.power = on
         switches.save()
@@ -392,8 +491,11 @@ public final class Daemon {
         switches.save()
         log("lamp \(on ? "on" : "off")")
         emit("lamp", ["on": on])
-        guard table.status == .ready else { return }
         let level = on ? max(0.01, switches.lampLevel) : 0
+        guard table.status == .ready else {
+            if linkOnDemand, wantConnected { _ = command("lamp", [Command.brightness(level)]) }
+            return
+        }
         Task { try? await self.table.send(Command.brightness(level)) }
     }
 
@@ -440,6 +542,10 @@ public final class Daemon {
     func play(_ id: UInt16) -> Job {
         playlistLastStart = Date()
         return enqueue("play") { _ in
+            if self.viaRelayJob {
+                try await self.relayRun("play", self.relayWake() + [.init(.play(id))])
+                return nil
+            }
             try await self.wakeForDrawing()
             try await self.table.play(id)
             return nil
@@ -450,6 +556,11 @@ public final class Daemon {
 
     func liveStart() async throws {
         guard live == nil else { return }
+        if table.status != .ready, linkOnDemand {
+            liveStarting = true   // has the relay take the table
+            defer { liveStarting = false }
+            _ = await waitForConnection(timeout: 90)
+        }
         guard table.status == .ready else { throw HTTPError(503, "table not connected") }
         let session = LiveSession(table: table)
         session.onEvent = { [weak self] e in self?.emit("live", ["event": "\(e)"]) }
@@ -495,6 +606,8 @@ public final class Daemon {
             "alarms": reportedAlarms.sorted().map { ["code": Int($0), "name": TableAlarm.codeNames[$0] ?? "?"] },
         ]
         if let s = table.tableState { out["state"] = stateJSON(s) }
+        // On demand the state is from the last time the table was linked: say when that was.
+        if let t = lastStateAt { out["stateAt"] = ISO8601DateFormatter().string(from: t) }
         out["link"] = linkJSON()   // Relay.swift
         return out
     }

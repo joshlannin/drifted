@@ -11,6 +11,20 @@ struct RelaySettings: Codable, Equatable {
     /// Bonjour instance name, e.g. "drifted-relay-1a2b3c".
     var name: String?
     var token: String?
+    /// "onDemand": the relay lets go of the table between jobs and check-ins (Link.swift). Otherwise ("always")
+    /// it holds the table all the time.
+    var link: String?
+    /// On demand: how often to take the table briefly for fresh status when nothing else has, and how long to
+    /// keep it after a job in case more follows.
+    var checkInMinutes: Double?
+    var lingerSeconds: Double?
+    /// On demand, with relay firmware that can: hand each piece of table work to the relay as a job
+    /// (RelayJobs.swift). On unless false, which goes back to driving the table live through the relay.
+    var jobs: Bool?
+
+    var onDemand: Bool { enabled && link == "onDemand" }
+    var checkIn: TimeInterval { max(0.1, checkInMinutes ?? 30) * 60 }
+    var linger: TimeInterval { max(0, lingerSeconds ?? 60) }
 
     var endpoint: RelayEndpoint? {
         guard enabled, let token, !token.isEmpty else { return nil }
@@ -32,7 +46,9 @@ struct RelaySettings: Codable, Equatable {
 
     var json: [String: Any] {
         ["enabled": enabled, "host": host ?? NSNull(), "port": Int(port ?? RelayEndpoint.defaultPort),
-         "name": name ?? NSNull(), "tokenSet": !(token ?? "").isEmpty]
+         "name": name ?? NSNull(), "tokenSet": !(token ?? "").isEmpty,
+         "link": link == "onDemand" ? "onDemand" : "always", "checkInMinutes": checkIn / 60, "lingerSeconds": linger,
+         "jobs": jobs != false]
     }
 }
 
@@ -50,11 +66,19 @@ extension Daemon {
 
     /// /status "link": how the table is reached, and through a relay its signal to the table.
     func linkJSON() -> [String: Any] {
-        guard table.viaRelay else { return ["via": "bluetooth"] }
+        let iso = ISO8601DateFormatter()
+        guard table.viaRelay else { return ["via": "bluetooth", "lastLinked": linkLastLinked.map(iso.string(from:)) ?? NSNull()] }
         let s = table.relayStatus
-        return ["via": "relay", "relay": table.relayDescription ?? table.relayEndpoint?.description ?? NSNull(),
-                "relayConnected": table.relayConnected, "tableLink": s?.link ?? NSNull(),
-                "rssi": s?.rssi ?? NSNull(), "wifiRssi": s?.wifiRssi ?? NSNull(), "firmware": s?.firmware ?? NSNull()]
+        var out: [String: Any] = [
+            "via": "relay", "relay": table.relayDescription ?? table.relayEndpoint?.description ?? NSNull(),
+            "relayConnected": table.relayConnected, "tableLink": s?.link ?? NSNull(),
+            "rssi": s?.rssi ?? NSNull(), "wifiRssi": s?.wifiRssi ?? NSNull(), "firmware": s?.firmware ?? NSNull(),
+            "mode": linkOnDemand ? "onDemand" : "always", "lastLinked": linkLastLinked.map(iso.string(from:)) ?? NSNull()]
+        if linkOnDemand, wantConnected { out["nextCheckIn"] = iso.string(from: max(linkNextCheckIn, Date())) }
+        // The relay does the table work by itself (RelayJobs.swift), and whether it has a job now.
+        out["jobs"] = relayJobs
+        if relayJobs { out["jobRunning"] = table.relayJobRunning }
+        return out
     }
 
     func relayJSON() -> [String: Any] {
@@ -120,9 +144,28 @@ extension Daemon {
             else if let n = v as? Int, (1...65535).contains(n) { s.port = UInt16(n) }
             else { throw HTTPError(400, "port must be 1-65535 or null") }
         }
+        if let v = body["link"] {
+            guard let m = v as? String, ["always", "onDemand"].contains(m) else { throw HTTPError(400, "link must be \"always\" or \"onDemand\"") }
+            s.link = m == "onDemand" ? m : nil
+        }
+        if let v = body["jobs"] {
+            guard v is NSNull || v is Bool else { throw HTTPError(400, "jobs must be true, false or null") }
+            s.jobs = v as? Bool
+        }
+        for key in ["checkInMinutes", "lingerSeconds"] {
+            guard let v = body[key] else { continue }
+            let n = (v as? NSNumber)?.doubleValue
+            guard v is NSNull || (n.map { $0.isFinite && $0 >= 0 } ?? false) else { throw HTTPError(400, "\(key) must be a number or null") }
+            if key == "checkInMinutes" { s.checkInMinutes = n } else { s.lingerSeconds = n }
+        }
         if s.enabled, (s.token ?? "").isEmpty { throw HTTPError(400, "enabling the relay needs its token") }
         do { try s.save(config.stateDir) } catch { throw HTTPError(500, "couldn't save relay.json: \(error.localizedDescription)") }
-        log(s.enabled ? "relay: reaching the table through \(s.endpoint?.description ?? "?")" : "relay: off; using this Mac's Bluetooth")
+        log(s.enabled ? "relay: reaching the table through \(s.endpoint?.description ?? "?")"
+                + (s.onDemand ? ", linking on demand (check-in every \(Int(s.checkIn / 60)) min"
+                    + (s.jobs == false ? "; relay jobs off)" : ")") : ", always linked")
+            : "relay: off; using this Mac's Bluetooth")
+        relaySettings = s
+        linkNextCheckIn = Date()   // a change of mode starts with a fresh look at the table
         table.useRelay(s.endpoint)
     }
 }

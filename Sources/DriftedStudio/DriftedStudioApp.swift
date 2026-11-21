@@ -158,6 +158,7 @@ struct TablePanel: View {
         case .connecting: return "Connecting…"
         case .handshaking: return "Handshaking…"
         case .ready: return "Ready"
+        case .standby: return "Relay standing by"
         case .disconnected(let e): return e.map { "Disconnected: \($0)" } ?? "Disconnected"
         }
     }

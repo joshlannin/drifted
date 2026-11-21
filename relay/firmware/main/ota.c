@@ -13,6 +13,7 @@
 #include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include "job.h"
 #include "relay.h"
 
 static char s_url[256];
@@ -44,6 +45,8 @@ static void ota_task(void *arg) {
 
 bool ota_start(const char *url, char *msg, size_t msglen) {
     if (g_st.ota_running) { snprintf(msg, msglen, "an update is already running"); return false; }
+    // A job's pattern sits in the app slot the update is about to be written to.
+    if (job_busy()) { snprintf(msg, msglen, "a job is running; try again when it's finished"); return false; }
     if (strncmp(url, "http://", 7) != 0 && strncmp(url, "https://", 8) != 0) { snprintf(msg, msglen, "give an http(s) URL"); return false; }
     if (!g_st.wifi_up) { snprintf(msg, msglen, "Wi-Fi isn't connected"); return false; }
     strlcpy(s_url, url, sizeof s_url);

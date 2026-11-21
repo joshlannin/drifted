@@ -9,6 +9,9 @@ public enum DriftError: LocalizedError {
     /// The table sent "upload failed" (0x34/5) for the pattern; `stage` says when (failure-modes.md).
     case rejected(id: UInt16, stage: String)
     case noStorage
+    /// A job the relay ran by itself failed (RelayJob.swift). `retry`: it never got to the table, so running
+    /// it again may work; otherwise a step failed for good.
+    case relayJob(String, retry: Bool)
 
     public var errorDescription: String? {
         switch self {
@@ -18,6 +21,7 @@ public enum DriftError: LocalizedError {
         case .uploadFailed(let s): return "Upload failed: \(s)"
         case .rejected(let id, let stage): return "Upload failed: table rejected pattern \(id) \(stage)"
         case .noStorage: return "Table reports not enough storage space"
+        case .relayJob(let s, _): return s.isEmpty ? "The relay couldn't do it" : s.prefix(1).uppercased() + s.dropFirst()
         }
     }
 
@@ -40,6 +44,9 @@ public final class DriftTable: NSObject, ObservableObject {
 
     public enum Status: Equatable {
         case starting, bluetoothOff, idle, scanning, connecting, handshaking, ready
+        /// Through a relay only: connected to the relay, which has let go of the table until there's work
+        /// (`relayStandby()`). `connectRelay()` takes the table back.
+        case standby
         case disconnected(String?)
     }
 
@@ -119,7 +126,18 @@ public final class DriftTable: NSObject, ObservableObject {
     var relayScanTimer: Timer?
     /// Command lines to send once the relay accepts the connection.
     var relayPending: [String] = []
+    /// We asked the relay to let go of the table and stand by (`relayStandby()`).
+    var relayParked = false
+    var relayLastParkRelease = Date.distantPast
     var relayResultWaiters: [(command: String, cont: CheckedContinuation<[String: Any], Never>)] = []
+    /// The relay's protocol version, from its last welcome. 2 and up run jobs (DriftTable+RelayJobs.swift).
+    public internal(set) var relayProto: Int?
+    /// The job the relay is doing for us now.
+    var relayJob: RelayJobRun?
+    var relayJobTail: Task<Void, Never> = Task {}
+    /// Packets being handled are from a finished job's record of what the table said: nothing is waiting for
+    /// an answer and the connection status isn't theirs to change.
+    var replaying = false
 
     // MARK: Logging
 
@@ -273,10 +291,10 @@ public final class DriftTable: NSObject, ObservableObject {
         if recent.count > 256 { recent.removeFirst(recent.count - 256) }
 
         switch message {
-        case .waitingForConnection:
+        case .waitingForConnection where !replaying:
             status = .handshaking
             note("Table is waiting for connection confirm")
-        case .initComplete:
+        case .initComplete where !replaying:
             status = .ready
             note("Table init data complete — ready")
             peripheral?.readRSSI()
@@ -310,6 +328,8 @@ public final class DriftTable: NSObject, ObservableObject {
             }
         }
 
+        if replaying { return }   // the relay answered these when they arrived
+
         // Ack-bit packets are the table acknowledging *our* command (e.g. `b2 02` after we send the
         // time). Replying to them in kind makes an endless time-request loop, and ignoring them makes
         // the table resend 4× and restart the handshake (both observed on hardware).
@@ -336,12 +356,25 @@ public final class DriftTable: NSObject, ObservableObject {
         readyToWriteWaiters = []
     }
 
+    /// The relay let go of the table because we asked it to stand by. Nothing should be waiting on the link
+    /// then; anything that is fails as on a drop, without it being reported as one.
+    func linkParked() {
+        status = .standby
+        rssi = nil
+        parser = PacketParser()
+        for (_, w) in waiters { w.cont.resume(throwing: DriftError.notConnected) }
+        waiters = [:]
+    }
+
     /// Bytes the table sent through the relay go into the same parser as Bluetooth notifications.
     func received(_ bytes: [UInt8]) {
         for packet in parser.feed(bytes) { handle(packet) }
     }
 
     func setStatus(_ s: Status) { status = s }
+
+    /// An upload the relay did for us went into `id` (the table's own list follows when it re-sends it).
+    public func markStored(_ id: UInt16) { storedPatternIds.insert(id) }
     func setConnectedName(_ name: String?) { connectedName = name }
     func setDiscovered(_ list: [Discovered]) { discovered = list }
 

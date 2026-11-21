@@ -3,6 +3,7 @@
 //   purple, blinking   needs setup (no Wi-Fi network or token yet)      relay/setup.py
 //   red, blinking      can't join Wi-Fi
 //   amber, blinking    on Wi-Fi, looking for or connecting to the table
+//   blue, blinking     a job: the relay is doing table work by itself
 //   cyan               released: the HoMedics app can connect (press the button to take the table back)
 //   blue               linked to the table, no host connected
 //   green, blinking    host connected, waiting for the table's handshake request
@@ -14,6 +15,7 @@
 #include "esp_log.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include "job.h"
 #include "led_strip.h"
 #include "relay.h"
 
@@ -52,6 +54,7 @@ static void led_task(void *arg) {
         if (g_st.ota_running || g_st.button_held) set_rgb(flash ? 30 : 0, flash ? 30 : 0, flash ? 30 : 0);
         else if (!config_ready()) set_rgb(slow ? 25 : 0, 0, slow ? 30 : 0);
         else if (!g_st.wifi_up) set_rgb(fast ? 40 : 0, 0, 0);
+        else if (job_busy()) set_rgb(0, 0, fast ? 40 : 0);
         else if (g_st.released) set_rgb(0, 25, 25);
         else if (g_st.link != LINK_LINKED) set_rgb(slow ? 40 : 0, slow ? 15 : 0, 0);
         else if (!g_st.host_connected) set_rgb(0, 0, 40);

@@ -76,6 +76,8 @@ extension Daemon {
             return .json(statusJSON())
         case ("GET", ["log"]):
             return .json(["file": logFile.path, "lines": logLines(Int(req.query["lines"] ?? "") ?? 200)])
+        case ("GET", ["link"]):
+            return .json(linkTelemetryJSON(days: Int(req.query["days"] ?? "") ?? 14, events: Int(req.query["events"] ?? "") ?? 50))
         case ("POST", ["connect"]):
             setConnected(true); return .json(["ok": true])
         case ("POST", ["disconnect"]):
@@ -184,6 +186,7 @@ extension Daemon {
     }
 
     private func switchResponse(_ on: Bool) -> HTTPResponse {
+        // Not sent yet: on its way once the table is back, or (on demand) once the relay has taken it.
         .json(["on": on, "sent": table.status == .ready])
     }
 

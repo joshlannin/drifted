@@ -51,9 +51,10 @@ other computer┘     local API :8765, token auth
 |---|---|
 | Is the table supported? | Which phone app they use, or the table's size (above) |
 | Is Drifted installed? | `/Applications/Drifted.app` exists |
-| Is it running and connected? | A Drifted icon in the menu bar; its menu shows the connection state. Or `GET localhost:8765/status` with the token (below): `"connection": "ready"` means connected |
+| Is it running and connected? | A Drifted icon in the menu bar; its menu shows the connection state. Or `GET localhost:8765/status` with the token (below): `"connection": "ready"` means connected; `"standby"` (relay, link on demand) means the relay is connected and takes the table as soon as you send something |
 | Is your AI connected to it? | You can see the drifted tools (`get_status`, `show_pattern`…) |
 | Does it go through a relay? | `/status` `link.via` is `relay` (then `rssi` is the relay's signal to the table). `GET /relay` (or the `relay` tool) has the relay's own report: `link` (`linked` = it holds the table), `wifiRssi`, firmware. Its LED: blue linked, green Drifted connected, amber looking for the table, red no Wi-Fi, purple not set up |
+| Is the link holding up over days? | `GET /link` (or the `relay` tool, `action: "telemetry"`): per day, how much of the time the table was reachable, connections lost and why, how long the relay takes to reach the table, job and upload retries. A relay's Wi-Fi stalls while it holds the table; `PUT /relay {"link": "onDemand"}` has it hold the table only while there's work, and with relay firmware 0.2 the relay then does each piece of work by itself, without needing the network meanwhile (`/status` `link.jobs`; `relayJobs` in `GET /link`) ([relay/README.md](relay/README.md#linking-on-demand)) |
 | If it won't connect, or keeps dropping | The menu shows a hint after about a minute. Usual causes: the HoMedics app is still connected, the table is off or out of range, or Bluetooth permission wasn't allowed. `/status` gives `rssi` (dBm) while connected: below about -85 the link drops now and then. Drifted reconnects and reruns the job, but moving the Mac closer is the real fix |
 
 ```sh

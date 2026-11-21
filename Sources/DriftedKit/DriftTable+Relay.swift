@@ -9,6 +9,9 @@ import Foundation
 /// - handshaking: the relay is linked to the table (notifications on); waiting for 0x50/1 … 0x4F/1
 /// - ready / disconnected: as over Bluetooth. The relay losing the table or the TCP connection both count as
 ///   a dropped link, so the host's reconnect and job-retry logic carries on unchanged.
+/// - standby: connected to the relay, which has let go of the table because we asked (`relayStandby()`). The
+///   relay has one radio for Wi-Fi and Bluetooth, and its Wi-Fi stalls for seconds at a time while it holds
+///   the table, so a host that only needs the table now and then keeps it released in between.
 extension DriftTable {
     /// Switches between Bluetooth (nil) and a relay. Drops the current link; the caller's supervisor reconnects.
     public func useRelay(_ endpoint: RelayEndpoint?) {
@@ -23,6 +26,8 @@ extension DriftTable {
             disconnect()
         }
         relayEndpoint = endpoint
+        relayParked = false
+        relayProto = nil
         relayStatus = nil
         relayStatusJSON = nil
         note(endpoint.map { "Reaching the table through relay \($0.description)" } ?? "Reaching the table over this Mac's Bluetooth")
@@ -35,19 +40,39 @@ extension DriftTable {
     /// (an id from a relay scan), the relay switches to that table and remembers it.
     public func connectRelay(table: UUID? = nil) {
         guard let endpoint = relayEndpoint else { return }
+        relayParked = false
         setStatus(.connecting)
         if let id = table, let address = RelayTable.address(fromId: id) {
             sendRelayCommand("select \(address)")
         }
         if let relay, relay.isOpen {
-            // An observer connection (Choose table) becomes the host's: "connect" undoes a release, and the relay
-            // passes our writes on from the table's next handshake request.
+            // An observer connection (Choose table, standby) becomes the host's: "connect" undoes a release, and
+            // the relay passes our writes on from the table's next handshake request.
+            relay.quietLimit = RelayLink.busyQuietLimit   // its Wi-Fi goes quiet while it reaches the table
             sendRelayCommand("connect")
             if relayStatus?.linked == true { setStatus(.handshaking) }
             return
         }
         openRelay(endpoint, observe: false)
         note("Connecting to relay \(endpoint.description)…")
+    }
+
+    /// Keeps the connection to the relay but has it let go of the table until `connectRelay()`. The table
+    /// carries on drawing (and its own playlist) with nobody connected, and the relay's Wi-Fi is dependable
+    /// again. Status becomes `.standby` (after `.connecting` if the relay connection has to be opened first).
+    public func relayStandby() {
+        guard let endpoint = relayEndpoint else { return }
+        relayParked = true
+        if let relay, relay.isOpen {
+            relayLastParkRelease = Date()
+            sendRelayCommand("release")
+            relayStatus?.link = "released"   // don't act on "linked" from before the release
+            linkParked()
+            return
+        }
+        setStatus(.connecting)
+        openRelay(endpoint, observe: true)   // observing: a released table stays released
+        note("Connecting to relay \(endpoint.description) (to stand by)…")
     }
 
     /// Tells the relay to use this table from now on (an id from `discovered` while scanning through the relay).
@@ -71,6 +96,7 @@ extension DriftTable {
 
     /// Asks the relay to let go of the table (so the HoMedics app can connect), then closes the connection.
     func relayRelease() {
+        relayParked = false
         relayStopScan()
         guard let relay, relay.isOpen else {
             relay?.close("released")
@@ -151,19 +177,38 @@ extension DriftTable {
 
     private func relayEvent(_ event: RelayLink.Event, observe: Bool) {
         switch event {
-        case .opened(let name, let firmware):
+        case .opened(let name, let firmware, let proto):
+            relayProto = proto
             note("Relay \(name) (firmware \(firmware)) accepted the connection")
             let pending = relayPending
             relayPending = []
             if let relay { Task { for line in pending { try? await relay.send(.command(line)) } } }
             if status == .scanning { sendRelayCommand("scan") }
+            if relayParked {
+                // A relay that just started holds the table by itself, so ask even on an observing connection.
+                relayLastParkRelease = Date()
+                sendRelayCommand("release")
+                linkParked()
+                note("Standing by: the relay lets go of the table until there's work for it")
+            }
 
         case .status(let s, let raw):
             let wasLinked = relayStatus?.linked ?? false
+            relayStatusJSON = raw   // first: `relayStatus` is what observers are told about
             relayStatus = s
-            relayStatusJSON = raw
             setConnectedName(s.table?.name)
-            if s.linked {
+            // (A job on its way to the relay or running there: its Wi-Fi is busy or about to be poor.)
+            relay?.quietLimit = ["released", "idle", "off"].contains(s.link) && relayJob == nil ? RelayLink.idleQuietLimit : RelayLink.busyQuietLimit
+            relayJobStatus(s)
+            if relayParked {
+                // Standing by. A relay that restarted takes the table again by itself: ask it to let go.
+                // (Not while it has the table for a job of ours: it lets go by itself when that's done.)
+                if s.link != "released", !s.jobRunning, !relayJobRunning, status == .standby,
+                   Date().timeIntervalSince(relayLastParkRelease) > 5 {
+                    relayLastParkRelease = Date()
+                    sendRelayCommand("release")
+                }
+            } else if s.linked {
                 setRSSI(s.rssi)
                 if status == .connecting {
                     setStatus(.handshaking)
@@ -175,6 +220,7 @@ extension DriftTable {
             }
 
         case .tableData(let bytes):
+            if relayParked { break }   // the last bytes before a release
             if status == .connecting { setStatus(.handshaking) }
             received(bytes)
 
@@ -194,6 +240,15 @@ extension DriftTable {
 
         case .log(let line):
             note("relay: \(line)")
+
+        case .jobState(let j):
+            relayJobState(j)
+
+        case .jobResult(let j):
+            relayJobResult(j)
+
+        case .jobTableData(let id, let bytes):
+            relayJobTableData(id, bytes)
 
         case .closed(let reason):
             relay = nil

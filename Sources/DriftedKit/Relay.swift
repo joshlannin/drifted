@@ -28,6 +28,21 @@ public enum RelayMessageType: UInt8 {
     case result = 0x31
     /// relay → host: one line of the relay's log.
     case log = 0x40
+    // Jobs (proto 2; RelayJob.swift): the relay does a piece of table work by itself.
+    /// host → relay: a job's header and steps (`RelayJob.encoded`).
+    case jobBegin = 0x50
+    /// host → relay: `job:u32, offset:u32` then pattern points, in order.
+    case jobData = 0x51
+    /// host → relay: `job:u32`: everything is there, run it.
+    case jobRun = 0x52
+    /// host → relay: where is the job? Answered with jobState, and the result again if it has finished.
+    case jobQuery = 0x53
+    /// relay → host: JSON `{job, state, op, ops, progress}`; state `refused` comes with `error`.
+    case jobState = 0x58
+    /// relay → host: JSON, when the job ends (`RelayJobResult`).
+    case jobResult = 0x59
+    /// relay → host: `job:u32` then bytes the table sent during the job, sent before the result.
+    case jobTableData = 0x5A
 }
 
 public struct RelayFrame: Equatable {
@@ -148,6 +163,11 @@ public struct RelayStatus: Equatable {
     public var firmware: String?
     /// The relay passes host writes on only after the table asks for a handshake (see relay/README.md).
     public var gate: String?
+    /// The relay's current or last job (proto 2): its id, state (`receiving`, `queued`, `linking`, `handshake`,
+    /// `running`, `done`) and progress 0…100.
+    public var jobId: UInt32?
+    public var jobState: String?
+    public var jobProgress: Int?
 
     public init(link: String, table: RelayTable? = nil, rssi: Int? = nil, wifiRssi: Int? = nil, firmware: String? = nil, gate: String? = nil) {
         self.link = link; self.table = table; self.rssi = rssi; self.wifiRssi = wifiRssi; self.firmware = firmware; self.gate = gate
@@ -157,17 +177,27 @@ public struct RelayStatus: Equatable {
         guard let link = j["link"] as? String else { return nil }
         self.init(link: link, table: (j["table"] as? [String: Any]).flatMap(RelayTable.init), rssi: j["rssi"] as? Int,
                   wifiRssi: j["wifiRssi"] as? Int, firmware: j["firmware"] as? String, gate: j["gate"] as? String)
+        if let job = j["job"] as? [String: Any] {
+            jobId = (job["id"] as? Int).flatMap { UInt32(exactly: $0) }
+            jobState = job["state"] as? String
+            jobProgress = job["progress"] as? Int
+        }
     }
 
     public var linked: Bool { link == "linked" }
+    /// The relay has the table for a job of its own.
+    public var jobRunning: Bool { ["queued", "linking", "handshake", "running"].contains(jobState ?? "") }
 }
 
 /// One TCP connection to a relay (Network.framework). Callbacks arrive on the main queue.
 @MainActor
 public final class RelayLink {
     public enum Event {
-        case opened(name: String, firmware: String)
+        case opened(name: String, firmware: String, proto: Int)
         case status(RelayStatus, raw: [String: Any])
+        case jobState([String: Any])
+        case jobResult([String: Any])
+        case jobTableData(job: UInt32, [UInt8])
         case tableData([UInt8])
         case scan([RelayTable])
         case result([String: Any])
@@ -182,6 +212,12 @@ public final class RelayLink {
     public private(set) var relayName: String?
     public private(set) var remote: String?
     var onEvent: ((Event) -> Void)?
+    /// How long the relay may say nothing before the connection counts as dead. It sends its status every
+    /// 5 s, and with its Bluetooth idle that arrives on time. While it holds or is reaching the table, its one
+    /// radio is shared with Bluetooth and Wi-Fi stalls for seconds at a time, so the owner allows more then.
+    var quietLimit: TimeInterval = RelayLink.busyQuietLimit   // until its first status says what it's doing
+    static let idleQuietLimit: TimeInterval = 15
+    static let busyQuietLimit: TimeInterval = 45
 
     private var connection: NWConnection?
     private var browser: NWBrowser?
@@ -203,15 +239,15 @@ public final class RelayLink {
         } else {
             browse()
         }
-        // The relay sends its status every 5 s, so 15 s of silence means the connection is dead (Wi-Fi gone,
-        // relay rebooted) even if TCP hasn't noticed. Also bounds the time to get a welcome.
+        // The relay sends its status every 5 s, so a long silence (`quietLimit`) means the connection is dead
+        // (Wi-Fi gone, relay rebooted) even if TCP hasn't noticed. Also bounds the time to get a welcome.
         lastHeard = Date()
         watchdog = Timer.scheduledTimer(withTimeInterval: 2.5, repeats: true) { [weak self] _ in
             MainActor.assumeIsolated {
                 guard let self, !self.closed else { return }
                 let quiet = Date().timeIntervalSince(self.lastHeard)
                 if !self.isOpen, quiet > 12 { self.close("no answer from the relay at \(self.endpoint.description)") }
-                else if quiet > 15 { self.close("the relay went quiet for 15 s") }
+                else if quiet > self.quietLimit { self.close("the relay went quiet for \(Int(self.quietLimit)) s") }
             }
         }
     }
@@ -288,7 +324,7 @@ public final class RelayLink {
             let j = frame.json ?? [:]
             isOpen = true
             relayName = j["name"] as? String
-            onEvent?(.opened(name: relayName ?? "relay", firmware: (j["firmware"] as? String) ?? "?"))
+            onEvent?(.opened(name: relayName ?? "relay", firmware: (j["firmware"] as? String) ?? "?", proto: (j["proto"] as? Int) ?? 1))
         case .error:
             close("relay refused the connection: \((frame.json?["error"] as? String) ?? "unknown error")")
         case .tableData:
@@ -302,6 +338,14 @@ public final class RelayLink {
             onEvent?(.result(frame.json ?? [:]))
         case .log:
             onEvent?(.log(String(decoding: frame.payload, as: UTF8.self)))
+        case .jobState:
+            if let j = frame.json { onEvent?(.jobState(j)) }
+        case .jobResult:
+            if let j = frame.json { onEvent?(.jobResult(j)) }
+        case .jobTableData:
+            guard frame.payload.count >= 4 else { break }
+            let p = frame.payload
+            onEvent?(.jobTableData(job: UInt32(p[0]) | UInt32(p[1]) << 8 | UInt32(p[2]) << 16 | UInt32(p[3]) << 24, Array(p[4...])))
         default:
             break   // unknown types are ignored so the relay can add messages
         }
