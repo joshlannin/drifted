@@ -33,6 +33,9 @@ Faults: --faults FILE names a JSON file, read again whenever it changes. Each en
   {"rejectNextStart": true}   the table refuses the next upload, whatever its id
   {"ignorePlays": 2}          the table ignores the next 2 plays
   {"ignorePlaylist": true}    the table doesn't re-send its playlists after the next change
+  {"lampDefault": true}       the table lost its lamp setting: on the next link it shows its stock colour, c0
+  {"lampSet": "c2"}           a palette colour picked somewhere else (the HoMedics app) shows on the next link
+  {"ignoreLamp": 2}           the table confirms the next 2 colour commands (0x14/15, 0x14/13) and does nothing
   {"stuck": true}             the table is half-way through an old init dump: it repeats 0x36/1 on every link
                               and never asks for a handshake, until something answers it
   {"dropLinkAtPage": 5}       the relay loses the table for 2 s when page 5 arrives
@@ -190,6 +193,12 @@ class Faults:
             return True
         return False
 
+    def take(self, key):
+        value = self.load().get(key)
+        if value is not None:
+            self.d[key] = None
+        return value
+
 
 class FakeTable:
     """The table's side of one BLE link. `send` delivers notification bytes to the relay."""
@@ -220,6 +229,13 @@ class FakeTable:
         self.pattern = 0
         self.drawing_since = None
         self.task = None
+        # The lamp: the palette entry shown and its colour. A custom colour is written as "Temp" (0x14/15) and
+        # selected by name (0x14/13).
+        self.palette = {"c0": (0x50, 0xFF, 0xB2), "c1": (0xFF, 0x80, 0x00), "c2": (0xFF, 0x00, 0xFF), "Temp": (255, 255, 255)}
+        self.lamp = "Temp"
+
+    def note_lamp(self):
+        self.stats.d["lamp"] = "%s #%02x%02x%02x" % ((self.lamp,) + tuple(self.palette[self.lamp]))
 
     # link
     def link_up(self):
@@ -232,6 +248,13 @@ class FakeTable:
         self.asked_this_link = False
         self.last_host = time.monotonic()
         self.restart("link up")
+        if self.faults.flag("lampDefault"):     # the table lost its lamp setting: back on the stock first colour
+            self.lamp = "c0"
+            self.stats.note("table: lamp back on its default, c0 (fault)")
+        chosen = self.faults.take("lampSet")    # a palette colour picked somewhere else (the HoMedics app)
+        if chosen in self.palette:
+            self.lamp = chosen
+        self.note_lamp()
         if self.faults.flag("stuck"):
             self.stuck = True
             self.stats.note("table: stuck half-way through an old init dump (fault)")
@@ -318,7 +341,7 @@ class FakeTable:
                 self.pattern = 0
             else:
                 progress, status = int(f * 10000), 1
-        data = (b"\x01" + bytes([60]) + s("Temp") + bytes([255, 255, 255]) + bytes([50]) + s(self.current_playlist)
+        data = (b"\x01" + bytes([60]) + s(self.lamp) + bytes(self.palette[self.lamp]) + bytes([50]) + s(self.current_playlist)
                 + u16(self.pattern) + u16(progress) + bytes([status, int(self.random), int(self.loop), 0, 0, 0]) + u16(0)
                 + s("A_11_V0.7.12") + bytes([0, 0])
                 + s("B_11_V0.3.3") + bytes([0, 0, 1]))
@@ -488,6 +511,14 @@ class FakeTable:
                 self.stats.d["plays"].append(pid)
                 self.stats.note(f"table: drawing pattern {pid}")
             return
+        if cmd == 0x14 and action in (13, 15) and not self.faults.count("ignoreLamp"):
+            if action == 15 and len(d) >= 5:
+                self.palette["Temp"] = tuple(d[2:5])
+            elif action == 13:
+                name = bytes(d[1:]).split(b"\x00")[0].decode(errors="replace")
+                if name in self.palette:
+                    self.lamp = name
+            self.note_lamp()
         # Everything else (settings, play/pause, power, …): a bare ConfirmData.
         self.stats.d["settings"] = (self.stats.d.get("settings", []) + [f"{cmd:02x}/{action}"])[-40:]
         self.send(CONFIRM)

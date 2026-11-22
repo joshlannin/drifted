@@ -58,6 +58,13 @@ public final class Daemon {
     /// The relay's own counts since it started (firmware 0.2), to see what each day added.
     var telemetryRelayCounts: [String: Int] = [:]
     var jobRunning = false
+    /// Lamp.swift: lamp commands queued or running; when the last one ended; the state last judged; how often
+    /// the lamp has been sent again without the table showing it, and when last.
+    var lampPending = 0
+    var lampCommandAt = Date.distantPast
+    var lampJudgedAt: Date?
+    var lampResends = 0
+    var lampResentAt = Date.distantPast
     private var reportedAlarms: Set<UInt16> = []
     private var lastStateKey = ""
     private var lastProgressEvent = Date.distantPast
@@ -161,6 +168,7 @@ public final class Daemon {
             while true {
                 try? await Task.sleep(nanoseconds: 4_000_000_000)
                 self.playlistTick()
+                self.lampWatch()
                 self.scheduleTick()
                 self.telemetryTick()
             }
@@ -531,6 +539,20 @@ public final class Daemon {
         switches.rotation == 0 ? p : p.rotated(by: switches.rotation * .pi / 180)
     }
 
+    /// Remembers the user's lamp colour and light mode (Lamp.swift).
+    /// `owed`: Drifted is putting it on the table and hasn't seen the table show it yet.
+    func rememberLamp(_ c: LampColor, owed: Bool = false) {
+        switches.lampColor = c
+        switches.lampOwed = owed
+        switches.save()
+    }
+
+    func setLampOwed(_ owed: Bool) {
+        guard switches.lampOwed != owed else { return }
+        switches.lampOwed = owed
+        switches.save()
+    }
+
     /// Keeps `switches.lamp` in step when brightness is set through /settings.
     func lampSetBySettings(brightness: Double) {
         let on = brightness > 0
@@ -598,6 +620,7 @@ public final class Daemon {
             "rssi": table.rssi ?? NSNull(),
             "power": switches.power,
             "lamp": switches.lamp,
+            "lampColor": switches.lampColor.map { ["color": $0.color, "name": $0.colorName, "shifting": $0.shifting, "breathing": $0.breathing] as [String: Any] } ?? NSNull(),
             "rotation": switches.rotation,
             "playlist": playlistJSON(),
             "schedule": ["enabled": schedule.enabled, "season": scheduleState.lampSeason ?? NSNull()] as [String: Any],
@@ -645,12 +668,17 @@ struct Switches: Codable {
     var lamp = true
     /// Last non-zero lamp level (0-1), used to relight it.
     var lampLevel = 0.5
+    /// The user's lamp colour and light mode, to put back when the table loses it or a season ends (Lamp.swift).
+    var lampColor: LampColor?
+    /// Drifted sent `lampColor` to the table (after a season, after the table lost it, or from /settings) and
+    /// hasn't seen the table show it yet. Until it does, what the table shows isn't taken for the user's choice.
+    var lampOwed = false
     /// Degrees (counter-clockwise) added to every drawing sent to the table, so pictures stand upright from
     /// where people usually look at it. The table's own theta zero points wherever its motor homed.
     var rotation = 0.0
     var file: URL?
 
-    enum CodingKeys: String, CodingKey { case power, lamp, lampLevel, rotation }
+    enum CodingKeys: String, CodingKey { case power, lamp, lampLevel, lampColor, lampOwed, rotation }
 
     init() {}
 
@@ -659,6 +687,8 @@ struct Switches: Codable {
         power = try c.decodeIfPresent(Bool.self, forKey: .power) ?? true
         lamp = try c.decodeIfPresent(Bool.self, forKey: .lamp) ?? true
         lampLevel = try c.decodeIfPresent(Double.self, forKey: .lampLevel) ?? 0.5
+        lampColor = try? c.decodeIfPresent(LampColor.self, forKey: .lampColor)
+        lampOwed = (try? c.decodeIfPresent(Bool.self, forKey: .lampOwed)) ?? false
         rotation = try c.decodeIfPresent(Double.self, forKey: .rotation) ?? 0
     }
 

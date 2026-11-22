@@ -52,6 +52,14 @@ Chaining short patterns gives near-real-time control on stock firmware:
 - The palette holds named colours (stock `c0`..`c3`). `0x14/15` writes a colour into it as "Temp"
   (it replaced slot 0 on our unit) and `0x14/13` selects one by name.
 - In shifting mode the colour cycles through the palette while idle.
+- The table can lose the selected colour: after a power cycle, and at least once with no known cause, it
+  showed stock `c0` (`#50ffb2`, a cyan-green) again, non-shifting, with brightness unchanged. A host that
+  wants a colour to stay has to remember it itself. drifted-host does (`/status` `lampColor`): a colour or
+  light mode set through `/settings` is the user's; one the table reports that was picked elsewhere (the
+  HoMedics app) becomes the user's too; and when the table shows `c0` where another colour was, the
+  remembered one is sent again, at most three times, ten minutes apart. Through a relay that links on demand
+  that happens at the next check-in. While a season colours the lamp, the same goes for the season's colour,
+  and nothing the table shows is taken for the user's.
 
 ## Connection
 

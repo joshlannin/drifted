@@ -218,14 +218,8 @@ public enum ScheduleRules {
 
 /// What the routine has done (schedule-state.json), so a restart doesn't run a step twice.
 struct ScheduleState: Codable {
-    /// The lamp as it was before a season coloured it, to put back afterwards.
-    struct Lamp: Codable {
-        var colorName: String
-        var color: String
-        var shifting: Bool
-        var shiftSeconds: UInt16
-        var breathing: Bool
-    }
+    /// Where the user's lamp was kept during a season before Drifted kept it all the time (`Switches.lampColor`).
+    typealias Lamp = LampColor
     struct Weather: Codable {
         var at: Date
         var source: String
@@ -454,63 +448,35 @@ extension Daemon {
         guard switches.lamp, tableUsable, !liveRunning, let state = table.tableState else { return }
         if let season {
             if scheduleState.lampSeason != season.name {
-                if scheduleState.lamp == nil {
-                    scheduleState.lamp = .init(colorName: state.colorName, color: state.color, shifting: state.shifting,
-                                               shiftSeconds: state.shiftSeconds, breathing: state.breathing)
+                // What comes back afterwards is the lamp Drifted remembers as the user's, not whatever the table
+                // shows today (it may have fallen back to its default). Only with nothing remembered: the table's.
+                if switches.lampColor == nil {
+                    rememberLamp(scheduleState.lamp ?? LampColor(state))
                 }
+                scheduleState.lamp = nil
                 scheduleState.lampSeason = season.name
                 scheduleState.colorIndex = 0
                 log("schedule: \(season.name) season; lamp \(season.colors.joined(separator: " / "))"
-                    + " (yours, \(scheduleState.lamp!.color)\(scheduleState.lamp!.shifting ? " shifting" : ""), comes back after it)")
+                    + " (yours, \(switches.lampColor!.summary), comes back after it)")
             } else if advance, season.colors.count > 1 {
                 scheduleState.colorIndex = (scheduleState.colorIndex + 1) % season.colors.count
             } else if !force {
                 return
             }
             saveScheduleState()
-            sendLampColor(season.colors[scheduleState.colorIndex % season.colors.count])
+            lampSend(.fixed(season.colors[scheduleState.colorIndex % season.colors.count]), "season lamp")
         } else {
-            if let saved = scheduleState.lamp {
-                log("schedule: \(scheduleState.lampSeason!) season over; lamp back to \(saved.color)\(saved.shifting ? " (shifting)" : "")")
-                restoreLamp(saved)
+            if let saved = switches.lampColor ?? scheduleState.lamp {
+                log("schedule: \(scheduleState.lampSeason!) season over; lamp back to \(saved.summary)")
+                rememberLamp(saved, owed: true)   // lampWatch sees it through
+                lampResends = 1
+                lampResentAt = now
+                lampSend(saved, "lamp restore")
             }
             scheduleState.lampSeason = nil
             scheduleState.lamp = nil
             saveScheduleState()
         }
-    }
-
-    private func sendLampColor(_ hex: String) {
-        guard let (r, g, b) = ScheduleRules.parseColor(hex) else { return }
-        let level = max(0.01, switches.lampLevel)
-        _ = command("season lamp", [Command.previewColor(r: r, g: g, b: b), Command.selectColor("Temp"),
-                                    Command.lightMode(shifting: false, breathing: false, brightness: level),
-                                    Command.brightness(level)])
-    }
-
-    private func restoreLamp(_ saved: ScheduleState.Lamp) {
-        let level = max(0.01, switches.lampLevel)
-        var packets: [Packet] = []
-        if saved.colorName == "Temp" || saved.colorName.isEmpty, let (r, g, b) = ScheduleRules.parseColor(saved.color) {
-            packets += [Command.previewColor(r: r, g: g, b: b), Command.selectColor("Temp")]
-        } else {
-            packets.append(Command.selectColor(saved.colorName))
-        }
-        packets += [Command.lightMode(shifting: saved.shifting, shiftTime: saved.shiftSeconds, breathing: saved.breathing, brightness: level),
-                    Command.brightness(level)]
-        _ = command("lamp restore", packets)
-    }
-
-    /// A colour set through /settings during a season is what comes back after it.
-    func scheduleNoteLightSettings(_ s: SettingsInput) {
-        guard scheduleState.lampSeason != nil, var saved = scheduleState.lamp,
-              s.color != nil || s.shifting != nil || s.breathing != nil else { return }
-        if let c = s.color { saved.colorName = "Temp"; saved.color = c.hasPrefix("#") ? c : "#" + c }
-        saved.shifting = s.shifting ?? false
-        saved.breathing = s.breathing ?? false
-        if let t = s.shiftSeconds { saved.shiftSeconds = UInt16(clamping: t) }
-        scheduleState.lamp = saved
-        saveScheduleState()
     }
 
     // MARK: API

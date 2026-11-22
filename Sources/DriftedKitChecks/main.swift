@@ -262,6 +262,31 @@ check("scheduleTimingAndSeasons") {
     expect(ScheduleRules.parseColor("#FFD27A")! == (255, 210, 122) && ScheduleRules.parseColor("#12345") == nil)
 }
 
+check("lampRules") {
+    let mine = LampColor.fixed("#FFD27A"), orange = LampColor.fixed("#ff7518")
+    let stock = LampColor(colorName: "c0", color: "#50ffb2"), other = LampColor(colorName: "c2", color: "#ff00ff")
+    expect(mine.color == "#ffd27a" && mine.colorName == "Temp" && !mine.shifting)
+    // The table echoes the colour it was given; a step or two of rounding still counts.
+    expect(LampRules.shows(LampColor(colorName: "Temp", color: "#FFD27B"), mine))
+    expect(!LampRules.shows(LampColor(colorName: "Temp", color: "#ffd290"), mine) && !LampRules.shows(stock, mine))
+    expect(LampRules.shows(LampColor(colorName: "c1", color: "#123456", shifting: true), LampColor(colorName: "c0", color: "#50ffb2", shifting: true)))
+    expect(!LampRules.shows(LampColor(colorName: "Temp", color: "#ffd27a", shifting: true), mine))
+    // Nothing remembered yet: what the table shows is the user's, except while a season has the lamp.
+    expect(LampRules.decide(table: stock, wanted: nil, inSeason: false) == .adopt)
+    expect(LampRules.decide(table: orange, wanted: nil, inSeason: true) == .nothing)
+    // The table lost the colour: put it back. In a season, that's the season's colour.
+    expect(LampRules.decide(table: mine, wanted: mine, inSeason: false) == .nothing)
+    expect(LampRules.decide(table: stock, wanted: mine, inSeason: false) == .restore)
+    expect(LampRules.decide(table: stock, wanted: orange, inSeason: true) == .restore)
+    // Something else, chosen somewhere else (the HoMedics app): follow it, but never in a season.
+    expect(LampRules.decide(table: other, wanted: mine, inSeason: false) == .adopt)
+    expect(LampRules.decide(table: LampColor.fixed("#102030"), wanted: mine, inSeason: false) == .adopt)
+    expect(LampRules.decide(table: mine, wanted: orange, inSeason: true) == .nothing)
+    expect(LampRules.decide(table: LampColor(colorName: "c0", color: "#50ffb2", shifting: true), wanted: mine, inSeason: false) == .adopt)
+    // The stock colour is the user's own choice: nothing to restore.
+    expect(LampRules.decide(table: stock, wanted: stock, inSeason: false) == .nothing)
+}
+
 check("tablePlaylists") {
     // 0x30/3: page 1, two playlists: "Demo" [4] and an empty one.
     let data: [UInt8] = [3, 1, 2] + Array("Demo".utf8) + [0, 1, 4, 0] + Array("id_1".utf8) + [0, 0]

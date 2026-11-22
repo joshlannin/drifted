@@ -328,6 +328,58 @@ if cc -shared -O1 -o "$WORK/libdriftjob.dylib" relay/firmware/main/job.c 2>"$WOR
   api PUT /playlist '{"active":false}' >/dev/null
   sleep 2
 
+  print "The lamp: the user's colour is kept, and put back when the table loses it; seasons hand it back…"
+  lampcolor() { api GET /status | field "d[\"lampColor\"][\"$1\"]"; }
+  owed() { python3 -c "import json; print(json.load(open('$STATE/switches.json')).get('lampOwed', False))"; }
+  checkin() { api PUT /relay '{"checkInMinutes":5}' >/dev/null; }   # any PUT /relay has the relay look at the table
+  logged() { grep -c "$1" "$WORK/host.log"; }
+  restored() { wait_for 20 "[[ \"\$(logged 'the relay did lamp restore')\" -ge $1 ]]"; sleep 1; }   # the Nth lamp job is over
+  J=$(api PUT /settings '{"color":"#FFD27A"}')
+  [[ "$(print -r -- $J | field 'd["state"]')" == done && "$(stat 'd["lamp"]')" == "Temp #ffd27a" && "$(lampcolor color)" == "#ffd27a" ]] \
+    && ok "a colour set through /settings is on the table and remembered as the user's" || bad "set colour: $J, table $(stat 'd.get("lamp")'), remembered $(api GET /status | field 'd.get("lampColor")')"
+  checkin
+  wait_for 30 '[[ "$(owed)" == False ]]' && ok "the next look at the table confirmed it" || bad "the colour was never confirmed (owed $(owed))"
+  fault '{"lampDefault": true}'
+  checkin
+  wait_for 40 '[[ "$(logged "back on its default colour")" == 1 && "$(stat "d[\"lamp\"]")" == "Temp #ffd27a" ]]' \
+    && ok "the table fell back to its stock colour: the user's colour went back on at the check-in" \
+    || bad "fallback not repaired: table $(stat 'd.get("lamp")'), log $(grep "lamp:" "$WORK/host.log" | tail -2)"
+  restored 1
+  checkin
+  wait_for 30 '[[ "$(owed)" == False ]]' || bad "the restored colour was never confirmed"
+  [[ "$(lampcolor color)" == "#ffd27a" && "$(logged "lamp restore")" -ge 1 ]] || bad "remembered colour changed: $(api GET /status | field 'd.get("lampColor")')"
+  fault '{"lampSet": "c2"}'
+  checkin
+  wait_for 30 '[[ "$(lampcolor name)" == c2 ]]' && [[ "$(stat 'd["lamp"]')" == "c2 #ff00ff" ]] \
+    && ok "a colour picked somewhere else (the HoMedics app) is followed, not fought" || bad "c2 not adopted: $(api GET /status | field 'd.get("lampColor")'), table $(stat 'd.get("lamp")')"
+  api PUT /settings '{"color":"#FFD27A"}' >/dev/null
+  checkin; wait_for 30 '[[ "$(owed)" == False ]]' || bad "colour not confirmed before the season"
+  TODAY=$(date +%m-%d)
+  api PUT /schedule "{\"enabled\":true,\"weatherAt\":null,\"playlistAt\":null,\"seasons\":[{\"name\":\"Testday\",\"start\":\"$TODAY\",\"end\":\"$TODAY\",\"ids\":[],\"weight\":1,\"colors\":[\"#FF7518\"]}]}" >/dev/null
+  wait_for 40 '[[ "$(stat "d[\"lamp\"]")" == "Temp #ff7518" ]]' && [[ "$(lampcolor color)" == "#ffd27a" ]] \
+    && ok "a season put its colour on the lamp; the user's colour is still the one remembered" || bad "season lamp: table $(stat 'd.get("lamp")'), remembered $(api GET /status | field 'd.get("lampColor")')"
+  checkin; sleep 12
+  [[ "$(lampcolor color)" == "#ffd27a" && "$(stat 'd["lamp"]')" == "Temp #ff7518" ]] \
+    && ok "a look at the table during the season: the season's colour isn't taken for the user's" || bad "season colour adopted: $(api GET /status | field 'd.get("lampColor")')"
+  fault '{"lampDefault": true}'
+  checkin
+  wait_for 40 '[[ "$(logged "putting the Testday colour")" == 1 && "$(stat "d[\"lamp\"]")" == "Temp #ff7518" ]]' \
+    && ok "the table fell back during the season: the season's colour went back on, not the user's" \
+    || bad "season fallback: table $(stat 'd.get("lamp")'), log $(grep "lamp:" "$WORK/host.log" | tail -2)"
+  restored 2
+  fault '{"ignoreLamp": 2}'
+  api PUT /schedule '{"seasons":[]}' >/dev/null
+  wait_for 40 '[[ "$(logged "season over; lamp back to #ffd27a")" == 1 ]]' && restored 3 || bad "season end never sent the lamp"
+  checkin; sleep 12
+  [[ "$(stat 'd["lamp"]')" == "Temp #ff7518" && "$(lampcolor color)" == "#ffd27a" && "$(owed)" == True && "$(logged "set somewhere else")" == 1 ]] \
+    && ok "the hand-back after the season was lost on the way: the season's colour isn't taken for the user's" \
+    || bad "lost hand-back: table $(stat 'd.get("lamp")'), remembered $(api GET /status | field 'd.get("lampColor")'), owed $(owed)"
+  api PUT /settings '{"color":"#FFD27A"}' >/dev/null
+  checkin
+  wait_for 30 '[[ "$(owed)" == False && "$(stat "d[\"lamp\"]")" == "Temp #ffd27a" ]]' && ok "set again: back on the user's colour" || bad "colour not back: $(stat 'd.get("lamp")')"
+  api PUT /schedule '{"enabled":false}' >/dev/null
+  fault '{}'
+
   [[ "$(grep -c "link: taking the table" "$WORK/host.log")" == "$wakes" && "$(connection)" == standby ]] \
     && ok "the host never took the table itself: standing by throughout" || bad "the host took the table ($(connection))"
   api PUT /relay '{"jobs":false}' >/dev/null

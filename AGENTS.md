@@ -120,7 +120,8 @@ drawing reads well, then send it. Without MCP: `drifted preview FILE out.png|out
 - **Always preview before showing**, and look at both images. Offer the user an animation for long drawings.
 - Use `clear: "area"` for text and small drawings so they're readable. A full clear takes about 10 minutes.
 - Drawing takes time: about 8 s per table radius of path. Tell the user roughly how long to expect.
-- Settings: `color` takes `#rrggbb`; brightness and speed take 0–1.
+- Settings: `color` takes `#rrggbb`; brightness and speed take 0–1. Drifted remembers the colour as the user's
+  (`/status` `lampColor`) and puts it back if the table falls back to its stock cyan-green, or after a season.
 - Portraits from photos: see [docs/portraits.md](docs/portraits.md).
 
 ## Rules

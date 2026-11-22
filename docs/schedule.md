@@ -74,10 +74,13 @@ year only).
   are left out of it, so holiday patterns only play in season. Overlapping seasons pool their ids and the
   larger weight applies.
 - **Lamp.** `colors` go on the lamp as a fixed colour when the season starts; with several, the lamp moves to
-  the next with each pattern. The first listed season with colours wins. Drifted remembers the lamp as the
-  table reported it just before (colour, shifting, breathing) and puts it back when the season ends; a colour
-  set through `/settings` during a season is what comes back. Brightness isn't touched. While the lamp switch
-  is off nothing is sent; the colour is applied when it's turned on.
+  the next with each pattern. The first listed season with colours wins. When the season ends, your own lamp
+  comes back: the colour and light mode Drifted remembers as yours (`/status` `lampColor`; see
+  [behaviour.md](behaviour.md#lighting)), not whatever the table happened to show when the season began. A
+  colour set through `/settings` during a season is what comes back. If the table loses its lamp setting during
+  a season, the season's colour goes back on. Brightness isn't touched. While the lamp switch is off nothing
+  is sent; the colour is applied when it's turned on. Through a relay that links on demand, Drifted sees the
+  table move to its next pattern at the next check-in, so that is when a season with several colours steps.
 - **Earlier start.** `playlistAt` on a season moves the playlist step on its days (e.g. `"06:00"`, so the
   holiday patterns are on by breakfast). With several, the earliest wins; the weather then has until 30
   minutes before it. It can't turn on a playlist step that's off. `GET /schedule` gives today's time as

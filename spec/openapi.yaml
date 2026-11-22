@@ -62,7 +62,7 @@ components:
 paths:
   /status:
     get:
-      summary: "Connection (ready; or standby: a relay linking on demand is connected and takes the table when something is sent), current drawing and progress as of stateAt, settings, latched alarms, and link: {via: bluetooth, lastLinked} or {via: relay, relay, relayConnected, tableLink, rssi, wifiRssi, firmware, mode (always or onDemand), lastLinked, nextCheckIn, jobs (the relay does table work by itself), jobRunning} (rssi is then the relay's signal to the table)"
+      summary: "Connection (ready; or standby: a relay linking on demand is connected and takes the table when something is sent), current drawing and progress as of stateAt, settings, latched alarms, and link: {via: bluetooth, lastLinked} or {via: relay, relay, relayConnected, tableLink, rssi, wifiRssi, firmware, mode (always or onDemand), lastLinked, nextCheckIn, jobs (the relay does table work by itself), jobRunning} (rssi is then the relay's signal to the table); lampColor {color, name, shifting, breathing}: the lamp remembered as the user's, null until one is known"
       responses: { "200": { description: Status } }
   /log:
     get:
@@ -211,7 +211,7 @@ paths:
             schema:
               type: object
               properties:
-                color: { type: string, description: "#rrggbb, fixed colour" }
+                color: { type: string, description: "#rrggbb, fixed colour. drifted-host remembers it as the user's lamp (/status lampColor) and sends it again if the table falls back to its stock colour, or when a season that coloured the lamp ends" }
                 brightness: { type: number, minimum: 0, maximum: 1 }
                 speed: { type: number, minimum: 0, maximum: 1 }
                 shifting: { type: boolean }

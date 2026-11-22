@@ -153,9 +153,10 @@ extension Daemon {
             }
             let packets = try settingsPackets(input)
             if let b = input.brightness { lampSetBySettings(brightness: b) }
-            scheduleNoteLightSettings(input)
+            lampNoteSettings(input)
             if let p = input.power { powerSetBySettings(p) }
-            return try await jobResponse(command("settings", packets), req, wait: true)
+            let lamp = input.color != nil || input.shifting != nil || input.breathing != nil || input.brightness != nil
+            return try await jobResponse(lamp ? lampCommand("settings", packets) : command("settings", packets), req, wait: true)
 
         // Switches for Apple Home / Homebridge: GET for status, POST {"on": bool} or POST /power/on|off.
         // They answer at once; if the table is reconnecting, the change is sent when it's back.
